@@ -130,6 +130,7 @@ class Instance:
             utils.inform('Trying to instantiate an MDP that is not parametric.', itype = 'WARNING')\
 
         if self.mdp_include:
+            raise ValueError("We are not using this.")
             path = in_out.cache_mdp(in_out.read_and_replace(self.name,p_values),self.name)
             prism_program = stormpy.parse_prism_program(path)
             expression_manager = prism_program.expression_manager
@@ -247,7 +248,6 @@ class Instance:
                     a = action.id
                     for transition in action.transitions:
                         next_s = transition.column
-                        print("Transition value:", transition.value())
                         for next_m in range(nM):
                             prod_next_state = next_s * nM + next_m
                             trans_prob = self.pomdp.T[s, a, next_s]

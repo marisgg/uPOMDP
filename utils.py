@@ -153,8 +153,6 @@ def parse_transition(transition):
                 derivative_value = value_to_float(derivative)
                 derivatives.append(derivative_value)
                 constants.append(constant)
-            print(value)
-            print(constant, c, constants, derivatives)
             return -1, variable_names, constants, derivatives
         else:
             raise TypeError(f'Value type of transition {transition} not understood.')

@@ -143,6 +143,26 @@ class Wrapper:
 
         transition_matrix = stormpy.build_sparse_matrix(T, row_group_indices = self.transition_matrix._row_group_indices[:-1])
         return transition_matrix
+    
+    def model_reward_and_labeling(self, return_raw_vectors = False):
+        labeling = self.model.labeling
+        reward_models = {}
+        reward_vectors = []
+        for reward_model_name in self.reward_models:
+            reward_model = self.reward_models[reward_model_name]
+            if reward_model.has_state_rewards:
+                state_rewards = reward_model.state_rewards
+                state_rewards_vector = [utils.value_to_float(x) for x in state_rewards]
+                if return_raw_vectors: reward_vectors.append(state_rewards_vector)
+                reward_models[reward_model_name] = stormpy.SparseRewardModel(optional_state_reward_vector = state_rewards_vector)
+            elif reward_model.has_state_action_rewards:
+                state_action_rewards = reward_model.state_action_rewards
+                state_action_rewards_vector = [utils.value_to_float(x) for x in state_action_rewards]
+                if return_raw_vectors: reward_vectors.append(state_action_rewards_vector)
+                reward_models[reward_model_name] = stormpy.SparseRewardModel(optional_state_action_reward_vector = state_action_rewards_vector)
+            else:
+                raise NotImplementedError('To implement.')
+        return labeling, reward_vectors if return_raw_vectors else reward_models
 
     def model_components(self, p_values = None):
         """
@@ -150,28 +170,15 @@ class Wrapper:
         Currently only works for one model parameter.
 
         """
-
         if self.is_parametric and p_values is None:
             raise ValueError('Model is parametric, so you must specify a value to instantiate with.')
         if not self.is_parametric:
             return self.model.transition_matrix, self.model.labeling, self.model.reward_models
         else:
             transition_matrix = self._instantiated_transition_matrix(p_values)
-            labeling = self.model.labeling
-            reward_models = {}
-            for reward_model_name in self.reward_models:
-                reward_model = self.reward_models[reward_model_name]
-                if reward_model.has_state_rewards:
-                    state_rewards = reward_model.state_rewards
-                    state_rewards_vector = [utils.value_to_float(x) for x in state_rewards]
-                    reward_models[reward_model_name] = stormpy.SparseRewardModel(optional_state_reward_vector = state_rewards_vector)
-                elif reward_model.has_state_action_rewards:
-                    state_action_rewards = reward_model.state_action_rewards
-                    state_action_rewards_vector = [utils.value_to_float(x) for x in state_action_rewards]
-                    reward_models[reward_model_name] = stormpy.SparseRewardModel(optional_state_action_reward_vector = state_action_rewards_vector)
-                else:
-                    raise NotImplementedError('To implement.')
-            return transition_matrix, labeling, reward_models
+            labeling, rewards = self.model_reward_and_labeling()
+
+            return transition_matrix, labeling, rewards
 
     def export(self, file):
         """

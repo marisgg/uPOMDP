@@ -11,6 +11,7 @@ import pycarl
 from joblib import Parallel, delayed
 from mem_top import mem_top
 import inspect
+from interval_models import IPOMDP
 
 from net import Net
 from instance import Instance
@@ -64,6 +65,7 @@ class Experiment:
         cfg = self.cfgs[cfg_idx]
         instance = Instance(cfg)
         pomdp = instance.build_pomdp()
+        ipomdp = IPOMDP(pomdp, cfg['p_bounds'])
         ps = cfg['p_init']
         worst_ps = ps
         mdp = instance.build_mdp(ps)
