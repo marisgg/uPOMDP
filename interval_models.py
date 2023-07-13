@@ -25,7 +25,7 @@ class IPOMDP:
         self.nS = pPOMDP.nS
         self.nA = pPOMDP.nA
 
-    def create_iDTMC_matrices(self, fsc : FiniteMemoryPolicy) -> tuple[np.ndarray, np.ndarray]:
+    def create_iDTMC(self, fsc : FiniteMemoryPolicy) -> tuple[np.ndarray, np.ndarray]:
         nM = fsc.nM_generated
         fsc.mask(self.pPOMDP.policy_mask)
 
@@ -69,9 +69,10 @@ class IPOMDP:
                 rewards[prod_state] = self.R[s]
         
         assert None not in rewards
+        assert np.isclose(MC_T_lower.sum(axis=-1).all(), 1, atol=1e-05)
+        assert np.isclose(MC_T_upper.sum(axis=-1).all(), 1, atol=1e-05)
 
-        return IDTMC(MC_T_lower, MC_T_upper, state_labels, rewards)
-        
+        return IDTMC(MC_T_lower, MC_T_upper, state_labels, rewards)        
 
     @staticmethod
     def parse_parametric_transition(value, p_names, intervals):
@@ -129,8 +130,8 @@ class IDTMC:
 
     def __init__(self, T_up : np.ndarray, T_low : np.ndarray, state_labels, rewards : np.ndarray) -> None:
         self.state_labels = state_labels
-        self.T_up : np.ndarray = T_up
-        self.T_low : np.ndarray = T_low
-        self.R = rewards
+        self.T_up : np.ndarray = T_up   # 2D: (nS * nM) x (nS * nM)
+        self.T_low : np.ndarray = T_low # 2D: (nS * nM) x (nS * nM)
+        self.R = rewards                # 1D: (nS * nM)
 
 

@@ -102,6 +102,7 @@ class Experiment:
             utils.inform(f'{run_idx}-{round_idx}\t(QBN)\t\trloss \t%.4f' % r_loss[0] + '\t>>>> %3.4f' % r_loss[-1], indent = 0)
 
             fsc = net.extract_fsc(make_greedy = False, reshape = False)
+            idtmc = ipomdp.create_iDTMC(fsc)
             # print(fsc)
             # exit()
             pdtmc = instance.instantiate_pdtmc(fsc, zero = 0)
