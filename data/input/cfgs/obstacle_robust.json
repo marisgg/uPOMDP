@@ -29,7 +29,7 @@
 "pso_phi_g":0.5,
 "pso_phi_r":0.5,
 "batch_dim":4,
- "mdp_include": true
+ "mdp_include": false
 
 },
    {"name":"obstacle",
@@ -63,7 +63,7 @@
 "pso_phi_g":0.5,
 "pso_phi_r":0.5,
 "batch_dim":4,
- "mdp_include": true
+ "mdp_include": false
 },
    {"name":"obstacle",
 "formula_str":"Rmin=? [F \"goal\"]",
@@ -96,7 +96,7 @@
 "pso_phi_g":0.5,
 "pso_phi_r":0.5,
 "batch_dim":4,
- "mdp_include": true
+ "mdp_include": false
 },
    {"name":"obstacle",
 "formula_str":"Rmin=? [F \"goal\"]",
@@ -129,7 +129,7 @@
 "pso_phi_g":0.5,
 "pso_phi_r":0.5,
 "batch_dim":4,
- "mdp_include": true
+ "mdp_include": false
 }
 ]
 }

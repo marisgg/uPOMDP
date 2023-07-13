@@ -57,7 +57,7 @@ class Instance:
         self.pareto_front = [] # list of Pareto-efficient FScs.
         self.pareto_values = [] # list of Pareto-efficient values.
         self._solutions = [] # list of all FSCs and values.
-        self.mdp_include = True if cfg.get("mdp_include") else False
+        self.mdp_include = False # True if cfg.get("mdp_include") else False
 
     def build_pomdp(self):
         """
@@ -94,7 +94,7 @@ class Instance:
         nr_states = model.nr_states
         model = stormpy.pomdp.make_canonic(model)
         added_states = model.nr_states - nr_states
-        utils.inform(f'Build POMDP with nS = {model.nr_states} and nO = {model.nr_observations}. (Canonical added {added_states} states.)')
+        utils.inform(f'Built POMDP with nS = {model.nr_states} and nO = {model.nr_observations}. (Canonical added {added_states} states.)')
 
         self.pomdp = POMDPWrapper(model, self.properties)
 
@@ -205,9 +205,10 @@ class Instance:
         # __t = np.sum(__t, axis = 2) # nS x nM x nS' x nM'
 
         ps = list(self.p_bounds.keys())
-        T = np.zeros((self.pomdp.nS * nM, self.pomdp.nS * nM), dtype = 'float64')
-        D = np.zeros((self.pomdp.nS * nM, self.pomdp.nS * nM, len(ps)), dtype = 'float64')
-        C = np.zeros((self.pomdp.nS * nM, self.pomdp.nS * nM, len(ps)), dtype = 'float64')
+        assert len(ps) == 1
+        T = np.zeros((self.pomdp.nS * nM, self.pomdp.nS * nM), dtype = 'float64') # Holds the transition matrix for the Markov chain (nS x nM)
+        D = np.zeros((self.pomdp.nS * nM, self.pomdp.nS * nM, len(ps)), dtype = 'float64') # Holds the probabilities for the derived part of the parameter
+        C = np.zeros((self.pomdp.nS * nM, self.pomdp.nS * nM, len(ps)), dtype = 'float64') # Holds the probabilities for the constant part of the parameter
         observations_label_set = set.union(*[set(s) for s in self.pomdp.observation_labels])
         observation_labels = {observation_label : [] for observation_label in observations_label_set}
         state_labels = []
@@ -215,6 +216,18 @@ class Instance:
         rewards_strs = ['' for r_idx in range(self.pomdp.num_reward_models)]
         labels_to_states = {}
         next_memories = fsc.randomized_next_memories(add = zero)
+
+        # for s in range(self.pomdp.nS):
+        #     o = self.pomdp.O[s]
+        #     for m in range(nM):
+        #         prod_state = s * nM + m
+        #         for action in self.pomdp.model.states[s].actions:
+        #             a = action.id
+        #             for transition in action.transitions:
+        #                 s_next = transition.column
+        #                 value = transition.value()
+        #                 pass
+
         for s in range(self.pomdp.nS):
             o = self.pomdp.O[s]
             observation_label = self.pomdp.observation_labels[o]
@@ -234,6 +247,7 @@ class Instance:
                     a = action.id
                     for transition in action.transitions:
                         next_s = transition.column
+                        print("Transition value:", transition.value())
                         for next_m in range(nM):
                             prod_next_state = next_s * nM + next_m
                             trans_prob = self.pomdp.T[s, a, next_s]
@@ -241,28 +255,32 @@ class Instance:
                             # memory_prob = fsc._next_memories[m, o] == next_m
                             memory_prob = next_memories[m, o, next_m]
                             prob = trans_prob * action_prob * memory_prob
-                            T[prod_state, prod_next_state] += prob
                             (p_index, ) = np.where(self.pomdp.P[s, a, next_s]) # only one parameter per transition can exist.
                             if len(p_index) > 0:
                                 derivative = self.pomdp.D[s, a, next_s, p_index]
                                 constant = self.pomdp.C[s, a, next_s, p_index]
                                 D[prod_state, prod_next_state, p_index] += derivative * action_prob * memory_prob
                                 C[prod_state, prod_next_state, p_index] += constant * action_prob * memory_prob
+                            else:
+                                if prob < 0:
+                                    print(f"Negative probability? {prob} = {trans_prob} * {action_prob} * {memory_prob}")
+                                    raise ValueError()
+                                T[prod_state, prod_next_state] += prob
                             has_outgoing = True
                 for r_idx in range(self.pomdp.num_reward_models):
                     rewards_strs[r_idx] += f'\ts={prod_state} : {self.pomdp.rewards[s, r_idx]};\n'
 
         # Reachability analysis, delete labels of unreachable states.
-        hops = np.full((self.pomdp.nS * nM), np.inf) # k-hops from init to each state.
-        k = 0
-        hops[0] = 0
-        while np.any(hops < np.inf) and k < len(hops) + 1:
-            states, next_states = np.where(np.logical_or(T[hops < np.inf] > 0, np.any(D[hops < np.inf] != 0, axis = -1)))
-            hops[next_states] = np.minimum(k + 1, hops[next_states])
-            k += 1
+        # hops = np.full((self.pomdp.nS * nM), np.inf) # k-hops from init to each state.
+        # k = 0
+        # hops[0] = 0
+        # while np.any(hops < np.inf) and k < len(hops) + 1:
+        #     states, next_states = np.where(np.logical_or(T[hops < np.inf] > 0, np.any(D[hops < np.inf] != 0, axis = -1)))
+        #     hops[next_states] = np.minimum(k + 1, hops[next_states])
+        #     k += 1
 
-        state_labels = list(np.array(state_labels)[hops < np.inf])
-        memory_labels = list(np.array(memory_labels)[hops < np.inf])
+        # state_labels = list(np.array(state_labels)[hops < np.inf])
+        # memory_labels = list(np.array(memory_labels)[hops < np.inf])
 
         p_string = ''
         for idx, p in enumerate(ps):
@@ -292,19 +310,24 @@ class Instance:
                 next_tup = (next_s,)
                 if np.any(derivative != 0): # transition is parametric.
                     for p_index, p in enumerate(ps):
-                        trans_dict_d.update({state_tup+next_tup+(p,):derivative[p_index]})
-                        trans_dict_c.update({state_tup+next_tup+(p,):constant[p_index]})
-                        # d = derivative[p_index]
-                        # c = constant[p_index]
-                        # transitions_string += f" ({c} + {d}*{p}) : (s'={next_s}) +"
+                        # trans_dict_d.update({state_tup+next_tup+(p,):derivative[p_index]})
+                        # trans_dict_c.update({state_tup+next_tup+(p,):constant[p_index]})
+                        d = derivative[p_index]
+                        c = constant[p_index]
+                        transitions_string += f" ({c} + {d}*{p}) : (s'={next_s}) +"
                     has_outgoing = True
                 elif trans_prob > 0:
                     transitions_string += f" {trans_prob} : (s'={next_s}) +"
                     has_outgoing = True
-            for t_d in trans_dict_d:
-                if trans_dict_c[t_d] == 0:
-                    trans_dict_c[t_d] = 1-sum(trans_dict_c.values())
-                transitions_string += f" ({trans_dict_c[t_d]} + {trans_dict_d[t_d]}*{t_d[2]}) : (s'={t_d[1]}) +"
+                elif trans_prob == 0:
+                    pass
+                else:
+                    print(T, D, C, sep='\n')
+                    raise ValueError("Non-parametric transition that has a negative probability.")
+            # for t_d in trans_dict_d:
+            #     if trans_dict_c[t_d] == 0:
+            #         trans_dict_c[t_d] = 1-sum(trans_dict_c.values())
+            #     transitions_string += f" ({trans_dict_c[t_d]} + {trans_dict_d[t_d]}*{t_d[2]}) : (s'={t_d[1]}) +"
 
             if has_outgoing:
                 transitions_strings += transitions_string[:-2] + ';\n'
@@ -313,7 +336,7 @@ class Instance:
         contents = in_out.pdtmc_string(p_string, self.pomdp.nS, nM, transitions_strings, label_strings, rewards_strs[0])
         fn = in_out.cache_pdtmc(contents)
         prism_program = stormpy.parse_prism_program(fn, simplify = False)
-        os.remove(fn)
+        # os.remove(fn)
         if self.pomdp.is_parametric:
             model = stormpy.build_sparse_parametric_model(prism_program)
             p_region_dict = {
@@ -326,8 +349,8 @@ class Instance:
             p_region_dict = {}
 
         pdtmc = PDTMCModelWrapper(model, self.pomdp, nM, p_region_dict, state_labels, memory_labels)
-        if pdtmc.nS != np.count_nonzero(hops < np.inf):
-            raise ValueError('Inaccuracies after translating PDTMC to Stormpy model.')
+        # if pdtmc.nS != np.count_nonzero(hops < np.inf):
+            # raise ValueError('Inaccuracies after translating PDTMC to Stormpy model.')
         return pdtmc
 
     def worst_mdp(self, check_result, fsc):

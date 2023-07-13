@@ -46,6 +46,13 @@ class Experiment:
                     logs.append(copy.deepcopy(log))
         utils.inform(f'Finished experiment {self.name}.', indent = 0, itype = 'OKGREEN')
         log.output_benchmark_table(logs,log.base_output_dir)
+        try: log.output_learning_losses(logs,log.base_output_dir)
+        except Exception as e: 
+            print(e)
+        try: log.output_entropy(logs, self.num_runs, log.base_output_dir)
+        except Exception as e: print(e)
+        try: log.output_memory_usage(logs, self.num_runs, log.base_output_dir)
+        except Exception as e: print(e)
 
     def _run(self, log, cfg_idx, run_idx):
 
@@ -71,9 +78,10 @@ class Experiment:
             beliefs, states, hs, observations, policies, actions, rewards = net.simulate(pomdp, mdp, greedy = False, length = length)
 
             num_actions = pomdp.num_choices_per_state[states]
+
             observation_labels = pomdp.observation_labels[observations]
             empirical_result, _ = utils.evaluate_performance(instance, states, rewards)
-            valid = empirical_result < 4 * mdp.state_values[0]
+            # valid = empirical_result < 4 * mdp.state_values[0]
 
             until = np.argmax(observation_labels == instance.label_to_reach, axis = -1)
             until[until == 0] = length - 1
@@ -86,11 +94,14 @@ class Experiment:
             rnn_entropy = np.mean(relevant_entropies)
 
             relevant_hs = np.unique(hs[:, 1:][relevant_timesteps[:, 1:]], axis = 0)
+            # TRAIN QBN
             r_loss = net.improve_r(relevant_hs)
             utils.inform(f'{run_idx}-{round_idx}\t(RNN)\t\t\t%.4f' % empirical_result, indent = 0)
             utils.inform(f'{run_idx}-{round_idx}\t(QBN)\t\trloss \t%.4f' % r_loss[0] + '\t>>>> %3.4f' % r_loss[-1], indent = 0)
 
-            fsc = net.extract_fsc(make_greedy = False, reshape = True)
+            fsc = net.extract_fsc(make_greedy = False, reshape = False)
+            # print(fsc)
+            # exit()
             pdtmc = instance.instantiate_pdtmc(fsc, zero = 0)
             fsc_memories, fsc_policies = fsc.simulate(observations)
             log_fsc_policies = np.log(fsc_policies) / np.expand_dims(np.log(num_choices), axis = -1)
@@ -107,6 +118,16 @@ class Experiment:
             added = instance.add_fsc(check, fsc)
             utils.inform(f'{run_idx}-{round_idx}\t(%i-FSC)' % fsc.nM_generated + '\t\trinit \t%.4f' % check._lb_values[0] + '\t\t%.4f' % check._ub_values[0], indent = 0)
 
+            try:
+                error = set(check._lb_values).union(check._ub_values).intersection({np.nan, np.inf})
+                assert len(error) == 0, f"pDTMC checking resulting in NaN or infinite value: {error}"
+            except AssertionError as ae:
+                print(fsc)
+                print(pdtmc.model)
+                print("is parametric:", pdtmc.is_parametric)
+                print(ae)
+                exit()
+
             if cfg['ctrx_gen'] == 'rnd' and pomdp.is_parametric:
                 mdp, worst_value = instance.build_mdp(), 0
             elif cfg['ctrx_gen'] == 'crt' and added and pomdp.is_parametric:
@@ -116,6 +137,7 @@ class Experiment:
             elif cfg['ctrx_gen'] == 'rnd_full' and pomdp.is_parametric:
                 mdp, worst_value = instance.build_mdp(), 0
             elif cfg['ctrx_gen'] == 'crt_full' and pomdp.is_parametric:
+                # Maris: PSO for worst instantiation is done here.
                 mdp, worst_ps, worst_value = instance.worst_mdp(check, fsc)
             else:
                 worst_value = -1
@@ -138,6 +160,7 @@ class Experiment:
             else:
                 a_labels = utils.one_hot_encode(np.nanargmax(q_values, axis = -1), pomdp.nA, dtype ='float32')
             a_inputs = utils.one_hot_encode(observations, pomdp.nO, dtype = 'float32')
+            # TRAIN RNN + Actor
             a_loss = net.improve_a(a_inputs, a_labels)
 
             label_cross_entropies = np.sum(a_labels * - log_policies, axis = -1)

@@ -86,6 +86,9 @@ class FiniteMemoryPolicy:
         self.is_made_greedy = False
         self.is_masked = False # whether action distributions take into account (im)possible actions.
         self.is_randomized = is_randomized
+    
+    def __str__(self):
+        return f"nM (generated), nO, nA: {self.nM} ({self.nM_generated}), {self.nO}, {self.nA}, is_made_greedy: {self.is_made_greedy}, is_masked: {self.is_masked}, is_randomized: {self.is_randomized}\nPolicy: {self.action_distributions}\nUpdate: {self.next_memories}"
 
     def _check_distribution(self, distributions):
         """
@@ -177,6 +180,7 @@ class FiniteMemoryPolicy:
 
         action_distributions = self.action_distributions * mask
         invalid_entries = np.logical_and(action_distributions < zero, mask != 1)
+        # print("Removed", invalid_entries.sum(), "invalied entries from FSC.")
         action_distributions[invalid_entries] = 0
         self.action_distributions = utils.normalize(action_distributions)
 

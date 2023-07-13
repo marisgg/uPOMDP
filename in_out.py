@@ -134,8 +134,6 @@ class Log:
             self.__setattr__(name,value)
 
 
-
-
     def flush(self, cfg_idx, run_idx, **kwargs):
         """ Flushes kwargs to output folder. """
 
@@ -511,48 +509,26 @@ class Log:
                 cum_rewards.append(log.cum_rewards)
                 evalues.append(log.evalues)
                 ks.append(log.k)
+            def dict_helper(arr):
+                return {
+                    'mean' : np.mean(arr),
+                    'std' : np.std(arr),
+                    'min' : np.min(arr),
+                    'max' : np.max(arr),
+                    'median' : np.median(arr)
+                }
             # plot_label = run_log[0].plot_label
             output['table'] = {
-                'result_at_init' : {
-                    'mean' : np.mean(results_at_init),
-                    'std' : np.std(results_at_init),
-                    'min' : np.min(results_at_init),
-                    'max' : np.max(results_at_init)
-                    },
-                'duration' : {
-                    'mean' : np.mean(durations),
-                    'std' : np.std(durations),
-                    'min' : np.min(durations),
-                    'max' : np.max(durations)
-                    },
-                # 'value' : {
-                #     'mean' : np.mean(values),
-                #     'std' : np.std(values),
-                #     'min' : np.min(values),
-                #     'max' : np.max(values)
-                #     },
-                'cum_reward' : {
-                    'mean' : np.mean(cum_rewards),
-                    'std' : np.std(cum_rewards),
-                    'min' : np.min(cum_rewards),
-                    'max' : np.max(cum_rewards)
-                    },
-                'evalues' : {
-                    'mean' : np.mean(evalues),
-                    'std' : np.std(evalues),
-                    'min' : np.min(evalues),
-                    'max' : np.max(evalues)
-                    },
-                'k' : {
-                    'mean' : np.mean(ks).astype(np.float64),
-                    'std' : np.std(ks).astype(np.float64),
-                    'min' : np.min(ks).astype(np.float64),
-                    'max' : np.max(ks).astype(np.float64)
-                    }
+                'result_at_init' : dict_helper(results_at_init),
+                'duration' : dict_helper(durations),
+                # 'value' : dict_helper(values),
+                'cum_reward' : dict_helper(cum_rewards),
+                'evalues' : dict_helper(evalues),
+                'k' : dict_helper(ks),
                 }
 
         with open(f'{dir}/table.json', 'w+') as fp:
-            json.dump(output, fp, indent = 4)
+            json.dump(output, fp, indent = 4, default=float)
 
         return
 
@@ -561,7 +537,7 @@ class Log:
             y = np.stack([log.result_at_init for log in run_log])
             mean = np.mean(y, axis = 0)
             std = np.std(y, axis = 0)
-            g = sns.lineplot(                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   x = run_log[0].index, y = mean, label = run_log[0].plot_label, ax = ax)
+            g = sns.lineplot(x = run_log[0].index, y = mean, label = run_log[0].plot_label, ax = ax)
             g.fill_between(run_log[0].index, mean - std, mean + std, color = plt.gca().lines[-1].get_color(), alpha = 0.2)
 
         if len(run_log[0].index) < 20:

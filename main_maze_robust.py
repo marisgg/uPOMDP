@@ -11,5 +11,5 @@ for cfg in load_file[filename]:
       cfg["policy"] = policy
       if not cfg.get("mdp_include"):
          cfg["mdp_include"] = False
-      exp = Experiment(cfg["name"] + "_Robust_" +f'{cfg["p_init"]["sl"]}', cfg, 100)
+      exp = Experiment(cfg["name"] + "_Robust_" +f'{cfg["p_init"]["sl"]}', cfg, 1)
       exp.execute(False)

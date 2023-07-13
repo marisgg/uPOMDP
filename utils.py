@@ -81,12 +81,13 @@ def parse_transitions(model, p_names, check = True):
                 T[state.id, action.id, next_state] = value
                 S[state.id, action.id, next_state] = state.id == next_state
                 if variables is not None:
+                    if len(variables) != 1:
+                        raise NotImplementedError("Only a single parameter is implemented.")
                     for v, variable in enumerate(variables):
                         index_of_variable = p_names.index(variable)
                         P[state.id, action.id, next_state, index_of_variable] = variable
                         C[state.id, action.id, next_state, index_of_variable] = constants[v]
                         D[state.id, action.id, next_state, index_of_variable] = derivative_values[v]
-
     if check:
         differences = np.sum(T, axis = -1) - 1
         sum_to_1 = np.isclose(differences, 0, atol = 1e-05)
@@ -152,6 +153,8 @@ def parse_transition(transition):
                 derivative_value = value_to_float(derivative)
                 derivatives.append(derivative_value)
                 constants.append(constant)
+            print(value)
+            print(constant, c, constants, derivatives)
             return -1, variable_names, constants, derivatives
         else:
             raise TypeError(f'Value type of transition {transition} not understood.')
@@ -222,7 +225,8 @@ def evaluate_performance(instance, states, rewards):
             important_timesteps = important_timesteps < np.expand_dims(reached_at_timesteps, axis = -1)
         result = success / len(states)
     else:
-        cum_rewards = np.array(cumsum(rewards[:, :, 0], axis = 1, reverse = True, exclusive = True))
+        # cum_rewards = np.array(cumsum(rewards[:, :, 0], axis = 1, reverse = True, exclusive = True))
         important_timesteps = np.logical_and(state_labels != instance.label_to_reach, np.any(state_labels == instance.label_to_reach, axis = -1, keepdims = True))
-        result = np.mean(cum_rewards[:, 0])
+        # result = np.mean(cum_rewards[:, 0])
+        result = rewards.sum(axis=1).mean()
     return result, important_timesteps
