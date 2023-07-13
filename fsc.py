@@ -21,44 +21,14 @@ class FiniteMemoryPolicy:
 
         """
 
+
         if is_randomized:
             self._check_distribution(next_memories)
             self.nM_generated = self.nM = len(next_memories)
             self.M = np.arange(self.nM)
-
         elif len(next_memories) > 1:
-
             if reshape:
-
-                # Get rid of unreachable memories.
-                self.nM = len(next_memories)
-                reachable = set()
-                if initial_observation is not None:
-                    initial_next_memories = list(np.unique(next_memories[[0], initial_observation]))
-                    new_reachable = set(initial_next_memories)
-                else:
-                    new_reachable = set([0])
-                while len(new_reachable) > len(reachable):
-                    reachable = deepcopy(new_reachable)
-                    next_reachable = np.unique(next_memories[np.array(list(reachable))])
-                    new_reachable = set(list(next_reachable))
-                    new_reachable = new_reachable.union(reachable)
-                new_reachable.add(0)
-
-                self.M = np.array(list(new_reachable), dtype = 'int64')
-                self.nM_generated = len(self.M)
-
-                action_distributions = np.array(action_distributions[self.M])
-                next_memories = np.array(next_memories[self.M], dtype = 'int64')
-
-                self.index_of_M = np.full((self.nM), -1, dtype = 'int64')
-                for m in range(self.nM):
-                    index = np.where(self.M == m)[0]
-                    if len(index) == 1:
-                        self.index_of_M[m] = index
-                    elif len(index) > 1:
-                        raise ValueError(f'Found two indices for memory node {m}')
-
+                self.reshape(action_distributions, next_memories, initial_observation)
             else:
                 self.nM = len(next_memories)
                 self.nM_generated = self.nM
@@ -89,6 +59,44 @@ class FiniteMemoryPolicy:
     
     def __str__(self):
         return f"nM (generated), nO, nA: {self.nM} ({self.nM_generated}), {self.nO}, {self.nA}, is_made_greedy: {self.is_made_greedy}, is_masked: {self.is_masked}, is_randomized: {self.is_randomized}\nPolicy: {self.action_distributions}\nUpdate: {self.next_memories}"
+
+    def reshape(self, action_distributions, next_memories, initial_observation):
+        print(next_memories)
+        print(initial_observation)
+        # Get rid of unreachable memories.
+        self.nM = len(next_memories)
+        reachable = set()
+        if initial_observation is not None:
+            initial_next_memories = list(np.unique(next_memories[[0], initial_observation]))
+            new_reachable = set(initial_next_memories)
+        else:
+            new_reachable = set([0])
+        while len(new_reachable) > len(reachable):
+            reachable = deepcopy(new_reachable)
+            next_reachable = np.unique(next_memories[np.array(list(reachable))])
+            new_reachable = set(list(next_reachable))
+            new_reachable = new_reachable.union(reachable)
+        new_reachable.add(0)
+
+        self.M = np.array(list(new_reachable), dtype = 'int64')
+        self.nM_generated = len(self.M)
+
+        action_distributions = np.array(action_distributions[self.M])
+        next_memories = np.array(next_memories[self.M], dtype = 'int64')
+        
+        self.index_of_M = np.full((self.nM), -1, dtype = 'int64')
+        for m in range(self.nM):
+            index = np.where(self.M == m)[0]
+            if len(index) == 1:
+                self.index_of_M[m] = index
+            elif len(index) > 1:
+                raise ValueError(f'Found two indices for memory node {m}')
+        
+        assert self.index_of_M[next_memories].max() <= self.nM_generated, f"The new memory update contains reference to non-existent nodes: {next_memories.max()} not <= {self.nM_generated}: {self.index_of_M[next_memories]}"
+
+        print(self.index_of_M[next_memories])
+
+        print(self.index_of_M)
 
     def _check_distribution(self, distributions):
         """

@@ -109,7 +109,7 @@ class Net(tf.keras.Model):
     def _action(self, x, inspect = False, greedy = False, quantize = False, states = None, mask = None):
     
         if len(x.shape) > 2:
-            raise ValueError('Actions can only be determined for one time-step and batch size of 1.')
+            raise ValueError('Actions can only be determined for a single time-step.')
 
         batch_dim = x.shape[0]
 

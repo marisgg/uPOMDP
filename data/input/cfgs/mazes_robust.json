@@ -28,7 +28,7 @@
 "pso_rounds":5,
 "pso_phi_g":0.5,
 "pso_phi_r":0.5,
-"batch_dim":32
+"batch_dim":128
 },
    {"name":"maze2",
 "formula_str":"Rmin=? [F \"goal\"]",
@@ -60,7 +60,7 @@
 "pso_rounds":5,
 "pso_phi_g":0.5,
 "pso_phi_r":0.5,
-"batch_dim":32
+"batch_dim":128
 },
    {"name":"maze2",
 "formula_str":"Rmin=? [F \"goal\"]",
@@ -92,7 +92,7 @@
 "pso_rounds":5,
 "pso_phi_g":0.5,
 "pso_phi_r":0.5,
-"batch_dim":32
+"batch_dim":128
 },
    {"name":"maze2",
 "formula_str":"Rmin=? [F \"goal\"]",
@@ -124,7 +124,7 @@
 "pso_rounds":5,
 "pso_phi_g":0.5,
 "pso_phi_r":0.5,
-"batch_dim":32
+"batch_dim":128
 }
 ]
 }

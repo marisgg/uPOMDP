@@ -101,7 +101,7 @@ class Experiment:
             utils.inform(f'{run_idx}-{round_idx}\t(RNN)\t\t\t%.4f' % empirical_result, indent = 0)
             utils.inform(f'{run_idx}-{round_idx}\t(QBN)\t\trloss \t%.4f' % r_loss[0] + '\t>>>> %3.4f' % r_loss[-1], indent = 0)
 
-            fsc = net.extract_fsc(make_greedy = False, reshape = False)
+            fsc = net.extract_fsc(make_greedy = False, reshape = True)
             idtmc = ipomdp.create_iDTMC(fsc)
             # print(fsc)
             # exit()
@@ -149,12 +149,17 @@ class Experiment:
             length = instance.simulation_length()
             evalues = check.evaluate(cfg['p_evals'])
 
-            if cfg['policy'] == 'mdp':
+            if cfg['policy'].lower() == 'mdp':
                 q_values = mdp.action_values[states]
-            elif cfg['policy'] == 'qmdp':
+            elif cfg['policy'].lower() == 'qmdp':
                 nan = 10**10 if instance.objective == 'min' else -10**10
                 q = np.nan_to_num(mdp.action_values, nan=nan)
                 q_values = np.matmul(beliefs, q)
+            elif cfg['policy'].lower() == 'umdp':
+                q_values = ipomdp.mdp_action_values()[states]
+            elif cfg['policy'].lower() == 'qumdp':
+                q_values = ipomdp.mdp_action_values()[states]
+                q_values = np.matmul(beliefs, q_values)
             else:
                 raise ValueError("invalid policy")
 

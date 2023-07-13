@@ -9,7 +9,7 @@ from utils import value_to_float
 
 class IPOMDP:
     """
-    Interval wrapping of a pPOMDP in Stormpy.
+    Interval wrapping of a pPOMDP in Stormpy by keeping a lower and upper bound transition matrix induced by the intervals given for the parameters.
     """
 
     def __init__(self, pPOMDP : POMDPWrapper, intervals : dict[str, list]) -> None:
@@ -72,7 +72,13 @@ class IPOMDP:
         assert np.isclose(MC_T_lower.sum(axis=-1).all(), 1, atol=1e-05)
         assert np.isclose(MC_T_upper.sum(axis=-1).all(), 1, atol=1e-05)
 
-        return IDTMC(MC_T_lower, MC_T_upper, state_labels, rewards)        
+        return IDTMC(MC_T_lower, MC_T_upper, state_labels, rewards)
+    
+    def mdp_action_values(self) -> np.ndarray:
+        """
+        Return the Q-values of the robust policy for the underlying interval MDP.
+        """
+        raise NotImplementedError()
 
     @staticmethod
     def parse_parametric_transition(value, p_names, intervals):
