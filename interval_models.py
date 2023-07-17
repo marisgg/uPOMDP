@@ -7,6 +7,20 @@ import numpy as np
 
 from utils import value_to_float
 
+from enum import Enum
+
+
+class MDPSpec(Enum):
+    """
+    (PO)MDP objectives, first min/max is the agent's objective, second min/max is how nature resolves the uncertainty
+    """
+    Rminmax = 1
+    Rmaxmin = 2
+    Rminmin = 3
+    Rmaxmax = 4
+
+
+
 class IPOMDP:
     """
     Interval wrapping of a pPOMDP in Stormpy by keeping a lower and upper bound transition matrix induced by the intervals given for the parameters.
@@ -73,12 +87,77 @@ class IPOMDP:
         assert np.isclose(MC_T_upper.sum(axis=-1).all(), 1, atol=1e-05)
 
         return IDTMC(MC_T_lower, MC_T_upper, state_labels, rewards)
-    
-    def mdp_action_values(self) -> np.ndarray:
+
+
+    def preprocess(self, spec : MDPSpec, target):
+        reward_zero_states = set()
+        # TODO add state indexes (integers) to reward zero states set
+        reward_inf_states = set()
+        # TODO add state indexes that cannot reach the target almost surely to reward_inf_states
+
+        return reward_zero_states, reward_inf_states
+
+
+    def inner_problem(self, order, s, a):
+        T_inner = np.zeros(self.nS)
+
+        i = 0
+        t = order[i]
+        limit = np.sum(self.T_lower)
+        while limit - self.T_lower[s, a, t] + self.T_upper[s, a, t] < 1:
+            limit = limit - self.T_lower[s, a, t] + self.T_upper[s, a, t]
+            T_inner[t] = self.T_upper[s, a, t]
+            i += 1
+            t = order[i]
+
+        j = i
+        t = order[j]
+        T_inner[t] = 1 - (limit - self.T_lower[s, a, t])
+
+        for k in range(j + 1, self.nS):
+            t = order[k]
+            T_inner[t] = self.T_lower[s, a, t]
+        return T_inner
+
+    def mdp_action_values(self, spec : MDPSpec, target : set, epsilon=1e-6) -> np.ndarray:
         """
         Return the Q-values of the robust policy for the underlying interval MDP.
         """
-        raise NotImplementedError()
+        if spec is not MDPSpec.Rminmax:
+            raise NotImplementedError()
+
+        V = np.zeros(self.nS)
+        Q = np.zeros((self.nS, self.nA))
+
+        reward_zero_states, reward_inf_states = self.preprocess(spec)
+
+        error = 1.0
+        while error > epsilon:
+            error = 0.0
+            order = np.argsort(V)
+
+            v_next = np.zeros(self.nS)
+            q_next = np.zeros((self.nS, self.nA))
+            for s in range(self.nS):
+                for a in range(self.nA):
+                    if s in reward_zero_states:
+                        v_next[s] = 0
+                        q_next[s,a] = 0
+                    elif s in reward_inf_states:
+                        v_next[s] = np.inf
+                        q_next[s, a] = np.inf
+                    else:
+                        T_inner = self.inner_problem(order, s, a)
+                        q_next[s, a] = self.R[s] + T_inner * V
+
+                v_next[s] = max(q_next[s, :])
+            error = max(V - v_next)
+            V = v_next
+            Q = q_next
+
+        # optinal, also return V
+        return Q
+
 
     @staticmethod
     def parse_parametric_transition(value, p_names, intervals):
@@ -97,6 +176,7 @@ class IPOMDP:
         bounds = np.array([[c + d * intervals[p][0], c + d * intervals[p][1]] for c, d, p in zip(constants, derivatives, variable_names)])
         lower, upper = bounds[:, 0].prod(), bounds[:, 1].prod()
         return lower, upper
+
 
     @staticmethod
     def parse_transitions(model, p_names, intervals, debug=False):
@@ -139,5 +219,94 @@ class IDTMC:
         self.T_up : np.ndarray = T_up   # 2D: (nS * nM) x (nS * nM)
         self.T_low : np.ndarray = T_low # 2D: (nS * nM) x (nS * nM)
         self.R = rewards                # 1D: (nS * nM)
+
+
+
+    def inner_problem(self, order, s):
+        nb_states = self.T_low.shape[0]
+        T_inner = np.zeros(nb_states)
+
+        i = 0
+        t = order[i]
+        limit = np.sum(self.T_low)
+        while limit - self.T_low[s, t] + self.T_up[s, t] < 1:
+            limit = limit - self.T_low[s, t] + self.T_up[s, t]
+            T_inner[t] = self.T_up[s, t]
+            i += 1
+            t = order[i]
+
+        j = i
+        t = order[j]
+        T_inner[t] = 1 - (limit - self.T_low[s, t])
+
+        for k in range(j + 1, nb_states):
+            t = order[k]
+            T_inner[t] = self.T_low[s, t]
+        return T_inner
+
+
+
+    def preprocess(self, spec : MDPSpec, target):
+        reward_zero_states = set()
+        # TODO add states in target set to reward_zero_states set
+        reward_inf_states = set()
+        # TODO find states that cannot reach the target with prob. 1 and add them to reward_inf_states
+
+
+        if spec == MDPSpec.Rmaxmax or spec == MDPSpec.Rminmin:
+            # optimistic
+            nature_direction = 1
+        else:
+            nature_direction = -1
+
+        return reward_zero_states, reward_inf_states, nature_direction
+
+
+    def find_transition_model(self, V, nature_direction):
+        nb_states = self.T_low.shape[0]
+        T = np.zeros(self.T_low.shape)
+        order = np.argsort(V)
+        if nature_direction == 1:
+            # reverse for optimistic
+            order = order[::-1]
+
+        for s in range(nb_states):
+            T[s] = self.inner_problem(order, s)
+
+        return T
+
+
+
+    def check_reward(self, spec : MDPSpec, target : set, epsilon=1e-6):
+        if spec is not MDPSpec.Rminmax:
+            raise NotImplementedError()
+
+        nb_states = self.T_low.shape[0]
+        V = np.zeros(nb_states)
+        reward_zero_states, reward_inf_states, nature_direction = self.preprocess(spec)
+
+        error = 1.0
+        while error > epsilon:
+            error = 0.0
+            order = np.argsort(V)
+            if nature_direction == 1:
+                # reverse for optimistic
+                order = order[::-1]
+
+            v_next = np.zeros(nb_states)
+            for s in range(nb_states):
+                if s in reward_zero_states:
+                    v_next[s] = 0
+                elif s in reward_inf_states:
+                    v_next[s] = np.inf
+                else:
+                    T_inner = self.inner_problem(order, s)
+                    v_next[s] = self.R[s] + T_inner * V
+            error = max(V - v_next)
+            V = v_next
+
+        # optional, find transition matrix T
+        T = self.find_transition_model(V, nature_direction)
+        return V, T
 
 
