@@ -22,13 +22,13 @@
 "pso_n":500,
 "pso_fr":0.5,
 "blow_up":2,
-"policy": "mdp",
+"policy": "qumdp",
 "pso_lr":0.1,
 "pso_ar":0.2,
 "pso_rounds":5,
 "pso_phi_g":0.5,
 "pso_phi_r":0.5,
-"batch_dim":2
+"batch_dim":128
 },
   {"name":"maze5",
 "formula_str":"Rmin=? [F \"goal\"]",
@@ -54,13 +54,13 @@
 "pso_n":500,
 "pso_fr":0.5,
 "blow_up":2,
-"policy": "mdp",
+"policy": "qumdp",
 "pso_lr":0.1,
 "pso_ar":0.2,
 "pso_rounds":5,
 "pso_phi_g":0.5,
 "pso_phi_r":0.5,
-"batch_dim":2
+"batch_dim":128
 },
   {"name":"maze10",
 "formula_str":"Rmin=? [F \"goal\"]",
@@ -86,13 +86,13 @@
 "pso_n":500,
 "pso_fr":0.5,
 "blow_up":2,
-"policy": "mdp",
+"policy": "qumdp",
 "pso_lr":0.1,
 "pso_ar":0.2,
 "pso_rounds":5,
 "pso_phi_g":0.5,
 "pso_phi_r":0.5,
-"batch_dim":2
+"batch_dim":128
 },
   {"name":"maze15",
 "formula_str":"Rmin=? [F \"goal\"]",
@@ -118,13 +118,13 @@
 "pso_n":500,
 "pso_fr":0.5,
 "blow_up":2,
-"policy": "mdp",
+"policy": "qumdp",
 "pso_lr":0.1,
 "pso_ar":0.2,
 "pso_rounds":5,
 "pso_phi_g":0.5,
 "pso_phi_r":0.5,
-"batch_dim":2
+"batch_dim":128
 },
   {"name":"maze20",
 "formula_str":"Rmin=? [F \"goal\"]",
@@ -150,13 +150,13 @@
 "pso_n":500,
 "pso_fr":0.5,
 "blow_up":2,
-"policy": "mdp",
+"policy": "qumdp",
 "pso_lr":0.1,
 "pso_ar":0.2,
 "pso_rounds":5,
 "pso_phi_g":0.5,
 "pso_phi_r":0.5,
-"batch_dim":2
+"batch_dim":128
 },
   {"name":"maze25",
 "formula_str":"Rmin=? [F \"goal\"]",
@@ -182,13 +182,13 @@
 "pso_n":500,
 "pso_fr":0.5,
 "blow_up":2,
-"policy": "mdp",
+"policy": "qumdp",
 "pso_lr":0.1,
 "pso_ar":0.2,
 "pso_rounds":5,
 "pso_phi_g":0.5,
 "pso_phi_r":0.5,
-"batch_dim":2
+"batch_dim":128
 }
 ]
 }
