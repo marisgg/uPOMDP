@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections import deque
 from fsc import FiniteMemoryPolicy
 
 from models import POMDPWrapper
@@ -8,6 +9,8 @@ import numpy as np
 from utils import value_to_float
 
 from enum import Enum
+
+from queue import Queue
 
 
 class MDPSpec(Enum):
@@ -26,18 +29,20 @@ class IPOMDP:
     Interval wrapping of a pPOMDP in Stormpy by keeping a lower and upper bound transition matrix induced by the intervals given for the parameters.
     """
 
-    def __init__(self, pPOMDP : POMDPWrapper, intervals : dict[str, list]) -> None:
+    def __init__(self, pPOMDP : POMDPWrapper, intervals : dict[str, list], target_states : list[int]) -> None:
         self.pPOMDP = pPOMDP # the underling pPOMDP wrapper
         self.intervals : dict[str, list] = intervals
         self.T_lower, self.T_upper = IPOMDP.parse_transitions(pPOMDP.model, pPOMDP.p_names, intervals)
         self.state_labeling, self.reward_models = pPOMDP.model_reward_and_labeling(True)
         assert len(self.reward_models) == 1, "Only supporting rewards/costs as of yet."
         self.R = self.reward_models[0]
-
-        assert len(self.T_lower) == len(self.T_lower) == len(self.R) == pPOMDP.nS
+        assert len(self.T_lower) == len(self.T_lower) == len(self.R) == pPOMDP.nS, (len(self.T_lower), len(self.T_lower), len(self.R), pPOMDP.nS)
 
         self.nS = pPOMDP.nS
         self.nA = pPOMDP.nA
+
+        self.reward_zero_states, self.reward_inf_states = self.preprocess(target_states)
+
 
     def create_iDTMC(self, fsc : FiniteMemoryPolicy) -> tuple[np.ndarray, np.ndarray]:
         nM = fsc.nM_generated
@@ -86,14 +91,28 @@ class IPOMDP:
         assert np.isclose(MC_T_lower.sum(axis=-1).all(), 1, atol=1e-05)
         assert np.isclose(MC_T_upper.sum(axis=-1).all(), 1, atol=1e-05)
 
-        return IDTMC(MC_T_lower, MC_T_upper, state_labels, rewards)
+        return IDTMC(MC_T_lower, MC_T_upper, rewards, state_labels, memory_labels, labels_to_states)
 
 
-    def preprocess(self, spec : MDPSpec, target):
-        reward_zero_states = set()
-        # TODO add state indexes (integers) to reward zero states set
-        reward_inf_states = set()
-        # TODO add state indexes that cannot reach the target almost surely to reward_inf_states
+    def preprocess(self, target : list[int]):
+        reward_zero_states = set(target) # add state indexes (integers) to reward zero states set
+
+        reachability_vector = np.zeros(self.nS, dtype=int)
+        reachability_vector[target] = 1
+
+        queue = deque(target)
+
+        if not queue: raise ValueError()
+
+        while queue:
+            current_state = queue.popleft()
+            for next_state in range(self.nS):
+                for a in range(self.nA):
+                    if self.T_lower[next_state, a, current_state] > 0 and reachability_vector[next_state] == 0:
+                        reachability_vector[next_state] = 1
+                        queue.append(next_state)
+
+        reward_inf_states = set(np.where(reachability_vector == 0)[0].tolist())
 
         return reward_zero_states, reward_inf_states
 
@@ -129,8 +148,6 @@ class IPOMDP:
         V = np.zeros(self.nS)
         Q = np.zeros((self.nS, self.nA))
 
-        reward_zero_states, reward_inf_states = self.preprocess(spec)
-
         error = 1.0
         while error > epsilon:
             error = 0.0
@@ -140,15 +157,15 @@ class IPOMDP:
             q_next = np.zeros((self.nS, self.nA))
             for s in range(self.nS):
                 for a in range(self.nA):
-                    if s in reward_zero_states:
+                    if s in self.reward_zero_states:
                         v_next[s] = 0
                         q_next[s,a] = 0
-                    elif s in reward_inf_states:
+                    elif s in self.reward_inf_states:
                         v_next[s] = np.inf
                         q_next[s, a] = np.inf
                     else:
                         T_inner = self.inner_problem(order, s, a)
-                        q_next[s, a] = self.R[s] + T_inner * V
+                        q_next[s, a] = self.R[s] + (T_inner * V).sum()
 
                 v_next[s] = max(q_next[s, :])
             error = max(V - v_next)
@@ -214,11 +231,15 @@ class IDTMC:
     Interval model in Numpy format. Instantiating by combining a parametric model with an interval for each of the parameters. In this case a iPOMDP x FSC => iDTMC
     """
 
-    def __init__(self, T_up : np.ndarray, T_low : np.ndarray, state_labels, rewards : np.ndarray) -> None:
+    def __init__(self, T_up : np.ndarray, T_low : np.ndarray, rewards : np.ndarray, state_labels, memory_labels, labels_to_states) -> None:
         self.state_labels = state_labels
+        self.memory_labels = memory_labels
+        self.labels_to_states = labels_to_states
         self.T_up : np.ndarray = T_up   # 2D: (nS * nM) x (nS * nM)
         self.T_low : np.ndarray = T_low # 2D: (nS * nM) x (nS * nM)
+        assert self.T_up.ndim == self.T_low.ndim == 2
         self.R = rewards                # 1D: (nS * nM)
+        assert self.R.ndim == 1
 
 
 
@@ -244,14 +265,24 @@ class IDTMC:
             T_inner[t] = self.T_low[s, t]
         return T_inner
 
-
-
     def preprocess(self, spec : MDPSpec, target):
-        reward_zero_states = set()
-        # TODO add states in target set to reward_zero_states set
-        reward_inf_states = set()
-        # TODO find states that cannot reach the target with prob. 1 and add them to reward_inf_states
+        reward_zero_states = set(target.tolist())
 
+        nS = len(self.T_low)
+        reachability_vector = np.zeros(nS, dtype=int)
+        reachability_vector[target] = 1
+
+        queue = deque(target)
+        if not queue: raise ValueError("No target states in the DTMC.")
+
+        while queue:
+            current_state = queue.popleft()
+            for next_state in range(nS):
+                if self.T_low[next_state, current_state] + self.T_up[next_state, current_state] > 0 and reachability_vector[next_state] == 0:
+                    reachability_vector[next_state] = 1
+                    queue.append(next_state)
+
+        reward_inf_states = set(np.where(reachability_vector == 0)[0].tolist())
 
         if spec == MDPSpec.Rmaxmax or spec == MDPSpec.Rminmin:
             # optimistic
@@ -283,7 +314,7 @@ class IDTMC:
 
         nb_states = self.T_low.shape[0]
         V = np.zeros(nb_states)
-        reward_zero_states, reward_inf_states, nature_direction = self.preprocess(spec)
+        reward_zero_states, reward_inf_states, nature_direction = self.preprocess(spec, target)
 
         error = 1.0
         while error > epsilon:
@@ -301,7 +332,7 @@ class IDTMC:
                     v_next[s] = np.inf
                 else:
                     T_inner = self.inner_problem(order, s)
-                    v_next[s] = self.R[s] + T_inner * V
+                    v_next[s] = self.R[s] + (T_inner * V).sum()
             error = max(V - v_next)
             V = v_next
 

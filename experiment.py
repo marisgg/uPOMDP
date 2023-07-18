@@ -11,7 +11,8 @@ import pycarl
 from joblib import Parallel, delayed
 from mem_top import mem_top
 import inspect
-from interval_models import IPOMDP
+from interval_models import IDTMC, IPOMDP, MDPSpec
+from models import POMDPWrapper
 
 from net import Net
 from instance import Instance
@@ -64,14 +65,19 @@ class Experiment:
 
         cfg = self.cfgs[cfg_idx]
         instance = Instance(cfg)
-        pomdp = instance.build_pomdp()
-        ipomdp = IPOMDP(pomdp, cfg['p_bounds'])
+        pomdp : POMDPWrapper = instance.build_pomdp()
         ps = cfg['p_init']
         worst_ps = ps
         mdp = instance.build_mdp(ps)
         length = instance.simulation_length()
         checker = Checker(instance, cfg)
         net = Net(instance, cfg)
+
+        print("POLICY:", cfg['policy'])
+
+        mdp_goal_states = [i for i, x in enumerate(mdp.state_labels) if instance.label_to_reach in x]
+
+        ipomdp = IPOMDP(pomdp, cfg['p_bounds'], mdp_goal_states)
 
         for round_idx in range(cfg['rounds']):
 
@@ -102,9 +108,8 @@ class Experiment:
             utils.inform(f'{run_idx}-{round_idx}\t(QBN)\t\trloss \t%.4f' % r_loss[0] + '\t>>>> %3.4f' % r_loss[-1], indent = 0)
 
             fsc = net.extract_fsc(make_greedy = False, reshape = True)
-            idtmc = ipomdp.create_iDTMC(fsc)
-            # print(fsc)
-            # exit()
+            idtmc : IDTMC = ipomdp.create_iDTMC(fsc)
+            IV, IT = idtmc.check_reward(MDPSpec.Rminmax, np.where(np.isin(idtmc.state_labels, np.unique(pomdp.labels_to_states[instance.label_to_reach])))[0])
             pdtmc = instance.instantiate_pdtmc(fsc, zero = 0)
             fsc_memories, fsc_policies = fsc.simulate(observations)
             log_fsc_policies = np.log(fsc_policies) / np.expand_dims(np.log(num_choices), axis = -1)
@@ -120,6 +125,7 @@ class Experiment:
             check = checker.check_pdtmc(pdtmc)
             added = instance.add_fsc(check, fsc)
             utils.inform(f'{run_idx}-{round_idx}\t(%i-FSC)' % fsc.nM_generated + '\t\trinit \t%.4f' % check._lb_values[0] + '\t\t%.4f' % check._ub_values[0], indent = 0)
+            utils.inform(f'{run_idx}-{round_idx}\t(%i-FSC)' % fsc.nM_generated + '\t\tiV \t%.4f' % IV[0], indent = 0)
 
             try:
                 error = set(check._lb_values).union(check._ub_values).intersection({np.nan, np.inf})
@@ -156,9 +162,11 @@ class Experiment:
                 q = np.nan_to_num(mdp.action_values, nan=nan)
                 q_values = np.matmul(beliefs, q)
             elif cfg['policy'].lower() == 'umdp':
-                q_values = ipomdp.mdp_action_values()[states]
+                q_values = ipomdp.mdp_action_values(MDPSpec.Rminmax, mdp_goal_states)[states]
             elif cfg['policy'].lower() == 'qumdp':
-                q_values = ipomdp.mdp_action_values()[states]
+                q_values = ipomdp.mdp_action_values(MDPSpec.Rminmax, mdp_goal_states)[states]
+                print(q_values)
+                assert np.nan not in q_values
                 q_values = np.matmul(beliefs, q_values)
             else:
                 raise ValueError("invalid policy")

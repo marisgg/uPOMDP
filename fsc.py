@@ -1,3 +1,5 @@
+from queue import PriorityQueue
+import random
 import numpy as np
 import scipy.stats
 
@@ -61,9 +63,9 @@ class FiniteMemoryPolicy:
         return f"nM (generated), nO, nA: {self.nM} ({self.nM_generated}), {self.nO}, {self.nA}, is_made_greedy: {self.is_made_greedy}, is_masked: {self.is_masked}, is_randomized: {self.is_randomized}\nPolicy: {self.action_distributions}\nUpdate: {self.next_memories}"
 
     def reshape(self, action_distributions, next_memories, initial_observation):
-        print(next_memories)
-        print(initial_observation)
-        # Get rid of unreachable memories.
+        """
+        Get rid of unreachable memories.
+        """
         self.nM = len(next_memories)
         reachable = set()
         if initial_observation is not None:
@@ -91,12 +93,6 @@ class FiniteMemoryPolicy:
                 self.index_of_M[m] = index
             elif len(index) > 1:
                 raise ValueError(f'Found two indices for memory node {m}')
-        
-        assert self.index_of_M[next_memories].max() <= self.nM_generated, f"The new memory update contains reference to non-existent nodes: {next_memories.max()} not <= {self.nM_generated}: {self.index_of_M[next_memories]}"
-
-        print(self.index_of_M[next_memories])
-
-        print(self.index_of_M)
 
     def _check_distribution(self, distributions):
         """
