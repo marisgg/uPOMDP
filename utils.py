@@ -223,8 +223,8 @@ def evaluate_performance(instance, states, rewards):
             important_timesteps = important_timesteps < np.expand_dims(reached_at_timesteps, axis = -1)
         result = success / len(states)
     else:
-        # cum_rewards = np.array(cumsum(rewards[:, :, 0], axis = 1, reverse = True, exclusive = True))
+        cum_rewards = np.array(cumsum(rewards[:, :, 0], axis = 1, reverse = True, exclusive = True))
         important_timesteps = np.logical_and(state_labels != instance.label_to_reach, np.any(state_labels == instance.label_to_reach, axis = -1, keepdims = True))
-        # result = np.mean(cum_rewards[:, 0])
-        result = rewards.sum(axis=1).mean()
+        result = np.mean(cum_rewards[:, 0])
+        # result = rewards.sum(axis=1).mean()
     return result, important_timesteps

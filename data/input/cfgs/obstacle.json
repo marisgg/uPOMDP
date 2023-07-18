@@ -3,7 +3,7 @@
     "batch_size":128,
        "epochs":32,
        "ctrx_gen":"crt_full",
-       "rounds":10,
+       "rounds":25,
        "p_init":{"sl":0.2},
        "p_evals": [{"sl": 0.1}, {"sl": 0.2}, {"sl": 0.3}, {"sl": 0.4}],
        "p_bounds":{"sl":[0.1,0.4]},
@@ -22,14 +22,14 @@
        "pso_n":500,
        "pso_fr":0.5,
        "blow_up":2,
-       "policy": "qmdp",
+       "policy": "umdp",
 "pso_lr":0.1,
 "pso_ar":0.2,
 "pso_rounds":5,
 "pso_phi_g":0.5,
 "pso_phi_r":0.5,
-"batch_dim":4,
- "mdp_include": true
+"batch_dim":128,
+ "mdp_include": false
 
 }
 ]

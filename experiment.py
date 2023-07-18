@@ -83,7 +83,7 @@ class Experiment:
 
             timesteps = np.repeat(np.expand_dims(np.arange(length), axis = 0), axis = 0, repeats = cfg['batch_dim'])
 
-            beliefs, states, hs, observations, policies, actions, rewards = net.simulate(pomdp, mdp, greedy = False, length = length)
+            beliefs, states, hs, observations, policies, actions, rewards = net.simulate(pomdp, mdp, greedy = True, length = length)
 
             num_actions = pomdp.num_choices_per_state[states]
 
@@ -104,7 +104,7 @@ class Experiment:
             relevant_hs = np.unique(hs[:, 1:][relevant_timesteps[:, 1:]], axis = 0)
             # TRAIN QBN
             r_loss = net.improve_r(relevant_hs)
-            utils.inform(f'{run_idx}-{round_idx}\t(RNN)\t\t\t%.4f' % empirical_result, indent = 0)
+            utils.inform(f'{run_idx}-{round_idx}\t(RNN)\t\tempir\t%.4f' % empirical_result, indent = 0)
             utils.inform(f'{run_idx}-{round_idx}\t(QBN)\t\trloss \t%.4f' % r_loss[0] + '\t>>>> %3.4f' % r_loss[-1], indent = 0)
 
             fsc = net.extract_fsc(make_greedy = False, reshape = True)
@@ -147,7 +147,10 @@ class Experiment:
                 mdp, worst_value = instance.build_mdp(), 0
             elif cfg['ctrx_gen'] == 'crt_full' and pomdp.is_parametric:
                 # Maris: PSO for worst instantiation is done here.
-                mdp, worst_ps, worst_value = instance.worst_mdp(check, fsc)
+                # mdp, worst_ps, worst_value = instance.worst_mdp(check, fsc)
+                worst_ps = {}
+                worst_value = -1
+                pass
             else:
                 worst_value = -1
                 worst_ps = {}
@@ -162,9 +165,10 @@ class Experiment:
                 q = np.nan_to_num(mdp.action_values, nan=nan)
                 q_values = np.matmul(beliefs, q)
             elif cfg['policy'].lower() == 'umdp':
-                q_values = ipomdp.mdp_action_values(MDPSpec.Rminmax, mdp_goal_states)[states]
+                q_values = ipomdp.mdp_action_values(MDPSpec.Rminmax)[states]
+                print(q_values)
             elif cfg['policy'].lower() == 'qumdp':
-                q_values = ipomdp.mdp_action_values(MDPSpec.Rminmax, mdp_goal_states)[states]
+                q_values = ipomdp.mdp_action_values(MDPSpec.Rminmax)[states]
                 print(q_values)
                 assert np.nan not in q_values
                 q_values = np.matmul(beliefs, q_values)
