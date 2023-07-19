@@ -46,6 +46,8 @@ class IPOMDP:
 
         self.reward_zero_states, self.reward_inf_states = self.preprocess(target_states)
 
+        print(self.reward_zero_states, self.reward_inf_states)
+
 
     def create_iDTMC(self, fsc : FiniteMemoryPolicy) -> tuple[np.ndarray, np.ndarray]:
         nM = fsc.nM_generated
@@ -91,8 +93,8 @@ class IPOMDP:
                 rewards[prod_state] = self.R[s]
         
         assert None not in rewards
-        assert (MC_T_lower.sum(axis=-1) <= 1).all(), MC_T_lower.sum(axis=-1)
-        assert (MC_T_upper.sum(axis=-1) >= 1).all(), MC_T_upper.sum(axis=-1)
+        assert (MC_T_lower.sum(axis=-1) <= 1.0 + 1e-10).all(), (MC_T_lower.sum(axis=-1)[MC_T_lower.sum(axis=-1) <= 1])
+        assert (MC_T_upper.sum(axis=-1) >= 1.0 - 1e-10).all(), MC_T_upper.sum(axis=-1)
 
         return IDTMC(MC_T_lower, MC_T_upper, rewards, state_labels, memory_labels, labels_to_states)
 
@@ -104,6 +106,8 @@ class IPOMDP:
         reachability_vector = np.zeros(nS, dtype=int)
         reachability_vector[target] = 1
 
+
+        # Backward DFS to find states with 0 probability to reach the target
         queue = deque(target)
         if not queue: raise ValueError("No target states in the DTMC.")
 
@@ -112,7 +116,7 @@ class IPOMDP:
             next_states = np.where(np.logical_and(self.T_lower[..., current_state].sum(axis=-1) > 0, reachability_vector == 0))[0]
             reachability_vector[next_states] = 1
             queue.extend(next_states)
-
+        # Forward DFS to find states reachable from states with 0 probability to reach the target
         reward_inf_states = set(np.where(reachability_vector == 0)[0].tolist())
         not_reaching_target_states = deque(reward_inf_states)
         while not_reaching_target_states:
@@ -130,10 +134,11 @@ class IPOMDP:
 
     def inner_problem(self, order, s, a):
         T_inner = np.zeros(self.nS)
-
         i = 0
         t = order[i]
-        limit = np.sum(self.T_lower)
+        limit = np.sum(self.T_lower[s, a])
+        if limit == 0 and np.sum(self.T_upper[s, a]) == 0:
+            return T_inner
         while limit - self.T_lower[s, a, t] + self.T_upper[s, a, t] < 1:
             limit = limit - self.T_lower[s, a, t] + self.T_upper[s, a, t]
             T_inner[t] = self.T_upper[s, a, t]
@@ -149,7 +154,7 @@ class IPOMDP:
             T_inner[t] = self.T_lower[s, a, t]
         return T_inner
 
-    def mdp_action_values(self, spec : MDPSpec, epsilon=1e-6) -> np.ndarray:
+    def mdp_action_values(self, spec : MDPSpec, epsilon=1e-6, max_iters=1e3) -> np.ndarray:
         """
         Return the Q-values of the robust policy for the underlying interval MDP.
         """
@@ -160,8 +165,8 @@ class IPOMDP:
         Q = np.zeros((self.nS, self.nA))
 
         error = 1.0
-        while error > epsilon:
-            error = 0.0
+        iters = 0
+        while error > epsilon and iters < max_iters:
             order = np.argsort(V)
 
             v_next = np.zeros(self.nS)
@@ -182,13 +187,14 @@ class IPOMDP:
             error = np.abs(v_next - V).max()
             V = v_next
             Q = q_next
+            iters += 1
 
         # optinal, also return V
         return Q
 
 
     @staticmethod
-    def parse_parametric_transition(value, p_names, intervals):
+    def parse_parametric_transition(value, p_names, intervals, lower_is_lower=True):
         variables = list(value.gather_variables())
         assert set(v.name for v in variables) == set(p_names), (set([v.name for v in variables]), set(p_names))
         constant = value.constant_part()
@@ -203,9 +209,10 @@ class IPOMDP:
             constants.append(c)
         assert len(constants) == len(derivatives) == len(variable_names)
         bounds = np.array([[c + d * intervals[p][0], c + d * intervals[p][1]] for c, d, p in zip(constants, derivatives, variable_names)])
-        bounds = np.sort(bounds,axis=-1)
+        if lower_is_lower:
+            bounds = np.sort(bounds,axis=-1)
         lower, upper = bounds[:, 0].prod(), bounds[:, 1].prod()
-        assert upper > lower
+        assert not lower_is_lower or upper >= lower
         return lower, upper
 
 
@@ -269,7 +276,12 @@ class IDTMC:
 
         i = 0
         t = order[i]
-        limit = np.sum(self.T_lower)
+        limit = np.sum(self.T_lower[s])
+
+        if limit == 0 and np.sum(self.T_upper[s]) == 0:
+            # Sanity check, transition probability is 0.
+            return T_inner
+
         while limit - self.T_lower[s, t] + self.T_upper[s, t] < 1:
             limit = limit - self.T_lower[s, t] + self.T_upper[s, t]
             T_inner[t] = self.T_upper[s, t]
@@ -336,17 +348,16 @@ class IDTMC:
 
         return T
 
-    def check_reward(self, spec : MDPSpec, target : set, epsilon=1e-6):
+    def check_reward(self, spec : MDPSpec, target : set, epsilon=1e-6, max_iters=1e3):
         if spec is not MDPSpec.Rminmax:
             raise NotImplementedError()
 
         nb_states = self.T_lower.shape[0]
         V = np.zeros(nb_states)
         reward_zero_states, reward_inf_states, nature_direction = self.preprocess(spec, target)
-
+        iters = 0
         error = 1.0
-        while error > epsilon:
-            error = 0.0
+        while error > epsilon and iters < max_iters:
             order = np.argsort(V)
             if nature_direction == 1:
                 # reverse for optimistic
@@ -363,7 +374,7 @@ class IDTMC:
                     v_next[s] = self.R[s] + np.inner(T_inner, V)
             error = np.abs(v_next - V).max()
             V = v_next
-
+            iters += 1
         # optional, find transition matrix T
         T = self.find_transition_model(V, nature_direction)
         return V, T

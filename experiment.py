@@ -83,7 +83,7 @@ class Experiment:
 
             timesteps = np.repeat(np.expand_dims(np.arange(length), axis = 0), axis = 0, repeats = cfg['batch_dim'])
 
-            beliefs, states, hs, observations, policies, actions, rewards = net.simulate(pomdp, mdp, greedy = True, length = length)
+            beliefs, states, hs, observations, policies, actions, rewards = net.simulate(pomdp, mdp, greedy = False, length = length)
 
             num_actions = pomdp.num_choices_per_state[states]
 
@@ -163,17 +163,20 @@ class Experiment:
             elif cfg['policy'].lower() == 'qmdp':
                 nan = 10**10 if instance.objective == 'min' else -10**10
                 q = np.nan_to_num(mdp.action_values, nan=nan)
+                assert beliefs.shape[-1] == q.shape[0], "Shape mismatch."
                 q_values = np.matmul(beliefs, q)
             elif cfg['policy'].lower() == 'umdp':
                 q_values = ipomdp.mdp_action_values(MDPSpec.Rminmax)[states]
-                print(q_values)
             elif cfg['policy'].lower() == 'qumdp':
-                q_values = ipomdp.mdp_action_values(MDPSpec.Rminmax)[states]
-                print(q_values)
+                q_values = ipomdp.mdp_action_values(MDPSpec.Rminmax)
                 assert np.nan not in q_values
+                assert beliefs.shape[-1] == q_values.shape[0], "Shape mismatch."
                 q_values = np.matmul(beliefs, q_values)
             else:
                 raise ValueError("invalid policy")
+            
+            if 'u' in cfg['policy']:
+                print("iMDP value:", q_values[mdp.initial_state].max())
 
             if instance.objective == 'min':
                 a_labels = utils.one_hot_encode(np.nanargmin(q_values, axis = -1), pomdp.nA, dtype ='float32')

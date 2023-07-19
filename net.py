@@ -26,7 +26,14 @@ class Net(tf.keras.Model):
         self.qbn_gru_rnn = GRUActor(instance, cfg)
         self.actor = tf.keras.layers.Dense(self.output_dim, 'softmax')
         self.build(input_shape = (None, None, instance.input_dim))
-        self.compile(loss = 'mse', optimizer = tf.keras.optimizers.Adam(learning_rate = cfg['a_lr']))
+        if cfg['a_loss'] == 'cce':
+            loss_f = tf.keras.losses.CategoricalCrossentropy(from_logits=False,label_smoothing=0)
+        else:
+            if cfg['a_loss'] != 'mse':
+                print("Unkown action loss specified, defaulting to MSE.")
+            loss_f = 'mse'
+        print("Policy loss function:", loss_f)
+        self.compile(loss = loss_f, optimizer = tf.keras.optimizers.Adam(learning_rate = cfg['a_lr']))
 
         self.hqs = np.array(list(itertools.product(*[[-1, 0, 1] for i in range(self.bottleneck_dim)])), dtype = 'float64')
         self.hqs_idxs = {np.array2string(np.squeeze(np.array(hq, dtype = 'int64'))) : idx for idx, hq in enumerate(self.hqs)}
