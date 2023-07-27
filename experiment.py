@@ -84,7 +84,6 @@ class Experiment:
             timesteps = np.repeat(np.expand_dims(np.arange(length), axis = 0), axis = 0, repeats = cfg['batch_dim'])
 
             beliefs, states, hs, observations, policies, actions, rewards = net.simulate(pomdp, mdp, greedy = False, length = length)
-
             num_actions = pomdp.num_choices_per_state[states]
 
             observation_labels = pomdp.observation_labels[observations]
@@ -108,8 +107,13 @@ class Experiment:
             utils.inform(f'{run_idx}-{round_idx}\t(QBN)\t\trloss \t%.4f' % r_loss[0] + '\t>>>> %3.4f' % r_loss[-1], indent = 0)
 
             fsc = net.extract_fsc(make_greedy = False, reshape = True)
-            idtmc : IDTMC = ipomdp.create_iDTMC(fsc)
-            IV, IT = idtmc.check_reward(MDPSpec.Rminmax, np.where(np.isin(idtmc.state_labels, np.unique(pomdp.labels_to_states[instance.label_to_reach])))[0])
+            idtmc : IDTMC = ipomdp.create_iDTMC(fsc, add_noise=0)
+
+            IV = idtmc.check_reward(MDPSpec.Rminmax, np.where(np.isin(idtmc.state_labels, np.unique(pomdp.labels_to_states[instance.label_to_reach])))[0])
+            utils.inform(f'{run_idx}-{round_idx}\t(%i-FSC)' % fsc.nM_generated + '\t\tiV \t%.4f' % IV[0], indent = 0)
+            # IT = idtmc.find_transition_model(IV, MDPSpec.Rminmax)
+            # T = ipomdp.find_critical_pomdp_transitions(IT, fsc, add_noise=0)
+
             pdtmc = instance.instantiate_pdtmc(fsc, zero = 0)
             fsc_memories, fsc_policies = fsc.simulate(observations)
             log_fsc_policies = np.log(fsc_policies) / np.expand_dims(np.log(num_choices), axis = -1)
@@ -125,7 +129,6 @@ class Experiment:
             check = checker.check_pdtmc(pdtmc)
             added = instance.add_fsc(check, fsc)
             utils.inform(f'{run_idx}-{round_idx}\t(%i-FSC)' % fsc.nM_generated + '\t\trinit \t%.4f' % check._lb_values[0] + '\t\t%.4f' % check._ub_values[0], indent = 0)
-            utils.inform(f'{run_idx}-{round_idx}\t(%i-FSC)' % fsc.nM_generated + '\t\tiV \t%.4f' % IV[0], indent = 0)
 
             try:
                 error = set(check._lb_values).union(check._ub_values).intersection({np.nan, np.inf})
@@ -147,10 +150,10 @@ class Experiment:
                 mdp, worst_value = instance.build_mdp(), 0
             elif cfg['ctrx_gen'] == 'crt_full' and pomdp.is_parametric:
                 # Maris: PSO for worst instantiation is done here.
-                # mdp, worst_ps, worst_value = instance.worst_mdp(check, fsc)
-                worst_ps = {}
-                worst_value = -1
-                pass
+                mdp, worst_ps, worst_value = instance.worst_mdp(check, fsc)
+                # worst_ps = {}
+                # worst_value = -1
+                # pass
             else:
                 worst_value = -1
                 worst_ps = {}
@@ -158,30 +161,43 @@ class Experiment:
             length = instance.simulation_length()
             evalues = check.evaluate(cfg['p_evals'])
 
+            nan_fixer = 10**10 if instance.objective == 'min' else -10**10
+
             if cfg['policy'].lower() == 'mdp':
-                q_values = mdp.action_values[states]
+                mdp_q_values = mdp.action_values
+                q_values = mdp_q_values[states]
             elif cfg['policy'].lower() == 'qmdp':
-                nan = 10**10 if instance.objective == 'min' else -10**10
-                q = np.nan_to_num(mdp.action_values, nan=nan)
+                mdp_q_values = mdp.action_values
+                q = np.nan_to_num(mdp_q_values, nan=nan_fixer)
                 assert beliefs.shape[-1] == q.shape[0], "Shape mismatch."
                 q_values = np.matmul(beliefs, q)
             elif cfg['policy'].lower() == 'umdp':
-                q_values = ipomdp.mdp_action_values(MDPSpec.Rminmax)[states]
+                mdp_q_values = ipomdp.mdp_action_values(MDPSpec.Rminmax)
+                mdp_q_values[self.mdp.A] = nan_fixer
+                assert mdp_q_values.shape == mdp.action_values.shape
+                q_values = mdp_q_values[states]
             elif cfg['policy'].lower() == 'qumdp':
-                q_values = ipomdp.mdp_action_values(MDPSpec.Rminmax)
-                assert np.nan not in q_values
-                assert beliefs.shape[-1] == q_values.shape[0], "Shape mismatch."
-                q_values = np.matmul(beliefs, q_values)
+                mdp_q_values = ipomdp.mdp_action_values(MDPSpec.Rminmax)
+                mdp_q_values[self.mdp.A] = nan_fixer
+                assert mdp_q_values.shape == mdp.action_values.shape
+                assert beliefs.shape[-1] == mdp_q_values.shape[0], "Shape mismatch."
+                q_values = np.matmul(beliefs, mdp_q_values)
             else:
                 raise ValueError("invalid policy")
-            
+
+            # print(ipomdp.mdp_action_values(MDPSpec.Rminmax))
+            # print(mdp.action_values)
+
+            # print(np.where(np.nanargmin(mdp.action_values, axis = -1) != ipomdp.mdp_action_values(MDPSpec.Rminmax)))
+
             if 'u' in cfg['policy']:
-                print("iMDP value:", q_values[mdp.initial_state].max())
+                print("iMDP value:", mdp_q_values[mdp.initial_state].min() if instance.objective == 'min' else q_values[mdp.initial_state].max())
 
             if instance.objective == 'min':
                 a_labels = utils.one_hot_encode(np.nanargmin(q_values, axis = -1), pomdp.nA, dtype ='float32')
             else:
                 a_labels = utils.one_hot_encode(np.nanargmax(q_values, axis = -1), pomdp.nA, dtype ='float32')
+
             a_inputs = utils.one_hot_encode(observations, pomdp.nO, dtype = 'float32')
             # TRAIN RNN + Actor
             a_loss = net.improve_a(a_inputs, a_labels)

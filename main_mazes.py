@@ -7,7 +7,7 @@ with open('data/input/cfgs/'+filename+'.json') as f:
 
 for filename in load_file:
    for cfg in load_file[filename]:
-      # for policy in ["qmdp", "mdp"]:
-         # cfg["policy"] = policy
-      exp = Experiment(cfg["name"], cfg, 100)
-      exp.execute(False)
+      for policy in ["qumdp", "umdp"]:
+         cfg["policy"] = policy
+         exp = Experiment(cfg["name"] + policy, cfg, 100)
+         exp.execute(False)

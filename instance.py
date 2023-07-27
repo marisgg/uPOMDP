@@ -271,16 +271,16 @@ class Instance:
                     rewards_strs[r_idx] += f'\ts={prod_state} : {self.pomdp.rewards[s, r_idx]};\n'
 
         # Reachability analysis, delete labels of unreachable states.
-        # hops = np.full((self.pomdp.nS * nM), np.inf) # k-hops from init to each state.
-        # k = 0
-        # hops[0] = 0
-        # while np.any(hops < np.inf) and k < len(hops) + 1:
-        #     states, next_states = np.where(np.logical_or(T[hops < np.inf] > 0, np.any(D[hops < np.inf] != 0, axis = -1)))
-        #     hops[next_states] = np.minimum(k + 1, hops[next_states])
-        #     k += 1
+        hops = np.full((self.pomdp.nS * nM), np.inf) # k-hops from init to each state.
+        k = 0
+        hops[0] = 0
+        while np.any(hops < np.inf) and k < len(hops) + 1:
+            states, next_states = np.where(np.logical_or(T[hops < np.inf] > 0, np.any(D[hops < np.inf] != 0, axis = -1)))
+            hops[next_states] = np.minimum(k + 1, hops[next_states])
+            k += 1
 
-        # state_labels = list(np.array(state_labels)[hops < np.inf])
-        # memory_labels = list(np.array(memory_labels)[hops < np.inf])
+        state_labels = list(np.array(state_labels)[hops < np.inf])
+        memory_labels = list(np.array(memory_labels)[hops < np.inf])
 
         p_string = ''
         for idx, p in enumerate(ps):
@@ -336,7 +336,7 @@ class Instance:
         contents = in_out.pdtmc_string(p_string, self.pomdp.nS, nM, transitions_strings, label_strings, rewards_strs[0])
         fn = in_out.cache_pdtmc(contents)
         prism_program = stormpy.parse_prism_program(fn, simplify = False)
-        # os.remove(fn)
+        os.remove(fn)
         if self.pomdp.is_parametric:
             model = stormpy.build_sparse_parametric_model(prism_program)
             p_region_dict = {
@@ -349,8 +349,8 @@ class Instance:
             p_region_dict = {}
 
         pdtmc = PDTMCModelWrapper(model, self.pomdp, nM, p_region_dict, state_labels, memory_labels)
-        # if pdtmc.nS != np.count_nonzero(hops < np.inf):
-            # raise ValueError('Inaccuracies after translating PDTMC to Stormpy model.')
+        if pdtmc.nS != np.count_nonzero(hops < np.inf):
+            raise ValueError('Inaccuracies after translating PDTMC to Stormpy model.')
         return pdtmc
 
     def worst_mdp(self, check_result, fsc):

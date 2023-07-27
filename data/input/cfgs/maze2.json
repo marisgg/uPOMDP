@@ -1,7 +1,7 @@
 {"maze2":[{"name":"maze2",
 "formula_str":"Rmin=? [F \"goal\"]",
 "ctrx_gen":"crt_full",
-"rounds":10,
+"rounds":25,
 "p_init":{"sl":0.2},
 "p_evals": [{"sl": 0.1}, {"sl": 0.2}, {"sl": 0.3}, {"sl": 0.4}],
 "p_bounds":{"sl":[0.1,0.4]},
@@ -26,7 +26,7 @@
 "pso_rounds":5,
 "pso_phi_g":0.5,
 "pso_phi_r":0.5,
-"batch_dim":1024
+"batch_dim":128
 }
 ]
 }
