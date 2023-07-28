@@ -98,16 +98,19 @@ class IPOMDP:
         LP = mip.Model(solver_name=mip.CBC)
         # acts = [ m.add_var(var_type=mip.INTEGER) for i in range(graph.num_agents) ]
 
-        T = np.array([[[LP.add_var(var_type='C', lb=0, ub=1) for _ in range(self.nA)] for _ in range(self.nS)] for _ in range(self.nS)])
+        T = np.array([[[[LP.add_var(var_type='C', lb=0, ub=1) for _ in range(self.nA)] for _ in range(nM)] for _ in range(self.nS)] for _ in range(self.nS)])
 
-        assert T.shape == (self.nS, self.nS, self.nA)
+        assert T.shape == (self.nS, self.nS, nM, self.nA)
 
         for s in range(self.nS):
             for s_ in range(self.nS):
-                LP += mip.xsum(T[s, s_, a] for a in range(self.nA)) <= 1
-                for a in range(self.nA):
-                    LP += float(self.T_lower[s, a, s_]) <= T[s, s_, a]
-                    LP += T[s, s_, a] <= float(self.T_upper[s, a, s_])
+                # LP += mip.xsum(mip.xsum(T[s, s_, n, a] for n in range(nM)) for a in range(self.nA)) <= 1
+                for n in range(nM):
+                    # LP += mip.xsum(T[s, s_, n, a] for a in range(self.nA)) <= 1
+                    for a in range(self.nA):
+                        pass
+                        # LP += float(self.T_lower[s, a, s_]) <= T[s, s_, n, a]
+                        # LP += T[s, s_, n, a] <= float(self.T_upper[s, a, s_])
 
         for s in range(self.nS):
             o = self.pPOMDP.O[s]
@@ -125,7 +128,9 @@ class IPOMDP:
                             chain_prob = float(MC_T[prod_state, prod_next_state])
                             # if chain_prob > 0 and memory_prob > 0 and action_prob > 0:
                             # T[s, a, s] += chain_prob / action_prob / memory_prob
-                            bound = mip.xsum(T[s][next_s][a] * float(fsc.action_distributions[m, o, a]) * float(next_memories[m, o, next_m]) for a in range(self.nA))
+                            a = np.argmax(fsc.action_distributions[m, o, a])
+                            bound = T[s][next_s][m][a] * 1 * float(next_memories[m, o, next_m])
+                            # bound = T[s][next_s][m][a] * float(fsc.action_distributions[m, o, a]) * float(next_memories[m, o, next_m])
                             LP += chain_prob >= bound
                             LP += chain_prob <= bound
                             # if T[s, a, next_s] > 0:
@@ -142,7 +147,9 @@ class IPOMDP:
 
         print(T)
 
-        assert np.allclose(T.sum(axis=-1), 1)
+        print(T.sum(axis=-2).sum(axis=-1))
+
+        assert np.allclose(T.sum(axis=-2).sum(axis=-1), 1)
 
         assert (np.logical_and(self.T_lower <= T, T <= self.T_upper)).all()
 
@@ -480,9 +487,7 @@ class IDTMC:
                 else:
                     assert (self.T_lower[s] <= self.T_upper[s]).all()
                     T_inner = IPOMDP.solve_inner_problem(order, self.T_lower[s], self.T_upper[s])
-                    # T_inner = self.inner_problem(order, s)
-                    # v_next[s] = self.R[s] + np.inner(T_inner, V)
-                    v_next[s] = self.R[s] + T_inner @ V
+                    v_next[s] = self.R[s] + T_inner @ V # inner product via numpy
             error = np.abs(v_next - V).max()
             V = v_next
             iters += 1
