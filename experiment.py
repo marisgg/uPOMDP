@@ -50,8 +50,7 @@ class Experiment:
         utils.inform(f'Finished experiment {self.name}.', indent = 0, itype = 'OKGREEN')
         log.output_benchmark_table(logs,log.base_output_dir)
         try: log.output_learning_losses(logs,log.base_output_dir)
-        except Exception as e: 
-            print(e)
+        except Exception as e: print(e)
         try: log.output_entropy(logs, self.num_runs, log.base_output_dir)
         except Exception as e: print(e)
         try: log.output_memory_usage(logs, self.num_runs, log.base_output_dir)
@@ -74,7 +73,7 @@ class Experiment:
         checker = Checker(instance, cfg)
         net = Net(instance, cfg)
 
-        print("POLICY:", cfg['policy'])
+        utils.inform(f"Target policy: {cfg['policy']}. Policy loss: {cfg['a_loss']}.", indent = 0, itype = 'OKBLUE')
 
         dynamic_uncertainty = True # TODO: Make config
         deterministic_target_policy = True # TODO: Make config
@@ -88,8 +87,8 @@ class Experiment:
 
         ipomdp = IPOMDP(pomdp, cfg['p_bounds'], mdp_goal_states)
         if 'u' in cfg['policy']:
-            ipomdp.mdp_action_values(spec)
-            utils.inform('Synthesized iMDP-policy w/ value OPT = %.2f' % ipomdp.imdp_V[0])
+            Q = ipomdp.mdp_action_values(spec)
+            utils.inform(f'Synthesized iMDP-policy (min: {Q.min():.2f}, max: {Q.max():.2f}) w/ value = {ipomdp.imdp_V[0]:.2f}')
 
         for round_idx in range(cfg['rounds']):
 
@@ -122,25 +121,24 @@ class Experiment:
             utils.inform(f'{run_idx}-{round_idx}\t(RNN)\t\tempir\t%.4f' % empirical_result, indent = 0)
             utils.inform(f'{run_idx}-{round_idx}\t(QBN)\t\trloss \t%.4f' % r_loss[0] + '\t>>>> %3.4f' % r_loss[-1], indent = 0)
 
-            fsc = net.extract_fsc(make_greedy = False, reshape = True)
-            # deterministic_fsc = net.extract_fsc(make_greedy = True, reshape = True)
-            deterministic_fsc = FiniteMemoryPolicy(
-                fsc.action_distributions, fsc.next_memories,
-                make_greedy = True, reshape = True,
-                initial_observation = instance.pomdp.initial_observation)
-            idtmc : IDTMC = ipomdp.create_iDTMC(deterministic_fsc, add_noise=0)
+            fsc, deterministic_fsc = net.extract_both_fscs(reshape=True)
+            assert np.allclose(fsc._next_memories, deterministic_fsc._next_memories)
+            # deterministic_idtmc : IDTMC = ipomdp.create_iDTMC(deterministic_fsc, add_noise=0)
             randomized_idtmc : IDTMC = ipomdp.create_iDTMC(fsc, add_noise=0)
-            IV = idtmc.check_reward(spec, np.where(np.isin(idtmc.state_labels, np.unique(pomdp.labels_to_states[instance.label_to_reach])))[0])
-            randomized_IV = idtmc.check_reward(spec, np.where(np.isin(idtmc.state_labels, np.unique(pomdp.labels_to_states[instance.label_to_reach])))[0])
-            utils.inform(f'{run_idx}-{round_idx}\t(det.  %i-FSC)' % fsc.nM_generated + '\t\tiV \t%.4f' % IV[0], indent = 0)
-            utils.inform(f'{run_idx}-{round_idx}\t(rand. %i-FSC)' % fsc.nM_generated + '\t\tiV \t%.4f' % randomized_IV[0], indent = 0)
-            IT = idtmc.find_transition_model(IV, spec)
-            randomized_IT = randomized_idtmc.find_transition_model(IV, spec)
-            T = ipomdp.find_critical_pomdp_transitions(IV, instance, IT, deterministic_fsc, add_noise=0)
 
+            randomized_IV = randomized_idtmc.check_reward(spec, np.where(np.isin(randomized_idtmc.state_labels, np.unique(pomdp.labels_to_states[instance.label_to_reach])))[0])
+            utils.inform(f'{run_idx}-{round_idx}\t(r. %i-FSC)' % fsc.nM_generated + '\tiMC-V \t%.4f' % randomized_IV[0], indent = 0)
+
+            # IV = deterministic_idtmc.check_reward(spec, np.where(np.isin(deterministic_idtmc.state_labels, np.unique(pomdp.labels_to_states[instance.label_to_reach])))[0])
+            # utils.inform(f'{run_idx}-{round_idx}\t(d. %i-FSC)' % fsc.nM_generated + '\tiMC-V \t%.4f' % IV[0], indent = 0)
+
+            # IT = deterministic_idtmc.find_transition_model(IV, spec)
+            randomized_IT = randomized_idtmc.find_transition_model(randomized_IV, spec)
+            # T = ipomdp.find_critical_pomdp_transitions(IV, instance, IT, deterministic_fsc, add_noise=0)
+            T = randomized_T = ipomdp.find_critical_pomdp_transitions(randomized_IV, instance, randomized_IT, fsc, add_noise=0)
             for n in range(fsc.nM_generated):
                 # Assert a valid graph structure in the transition probabilities for all nodes.
-                assert (np.where(np.logical_or(T[n] == 0, T[n] == 1))[0] == np.where(np.logical_or(mdp.T == 0, mdp.T == 1))[0]).all(), T[n]
+                assert np.array_equal(np.where(np.logical_or(np.isclose(T[n], 0, atol=1e-6), np.isclose(T[n], 1, atol=1e6)))[0], np.where(np.logical_or(np.isclose(mdp.T, 0, atol=1e-6), np.isclose(mdp.T, 1, atol=1e6)))[0]), T[n]
 
             pdtmc = instance.instantiate_pdtmc(fsc, zero = 0)
             fsc_memories, fsc_policies = fsc.simulate(observations)
@@ -213,8 +211,8 @@ class Experiment:
                 raise ValueError("invalid policy")
 
 
-            if 'u' in cfg['policy']:
-                print("iMDP value:", mdp_q_values[mdp.initial_state].min() if instance.objective == 'min' else q_values[mdp.initial_state].max())
+            if 'u' in cfg['policy'] and round == 0:
+                utils.inform(f'{run_idx}-{round_idx}''\t\iMDP value: \t%.4f' % mdp_q_values[mdp.initial_state].min() if instance.objective == 'min' else q_values[mdp.initial_state].max(), indent = 0)
             
             nanarg = np.nanargmin if instance.objective == 'min' else np.nanargmax
 

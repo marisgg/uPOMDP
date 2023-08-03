@@ -33,7 +33,6 @@ class Net(tf.keras.Model):
             if cfg['a_loss'] != 'mse':
                 print("Unkown action loss specified, defaulting to MSE.")
             loss_f = 'mse'
-        print("Policy loss function:", loss_f)
         self.compile(loss = loss_f, optimizer = tf.keras.optimizers.Adam(learning_rate = cfg['a_lr']))
 
         self.hqs = np.array(list(itertools.product(*[[-1, 0, 1] for i in range(self.bottleneck_dim)])), dtype = 'float64')
@@ -259,6 +258,21 @@ class Net(tf.keras.Model):
         train_result = self.fit(x = _inputs, y = _labels, batch_size = self.cfg['a_batch_size'], epochs = self.cfg['a_epochs'], verbose = 0)
         a_loss = train_result.history['loss']
         return a_loss
+    
+    def extract_both_fscs(self, reshape = True):
+        action_distributions, next_memories = self._construct_transaction_table()
+
+        randomized_fsc = FiniteMemoryPolicy(
+            action_distributions, next_memories,
+            make_greedy = False, reshape = reshape,
+            initial_observation = self.instance.pomdp.initial_observation)
+
+        deterministic_fsc = FiniteMemoryPolicy(
+            action_distributions, next_memories,
+            make_greedy = True, reshape = reshape,
+            initial_observation = self.instance.pomdp.initial_observation)
+        
+        return randomized_fsc, deterministic_fsc
 
     def extract_fsc(self, make_greedy = True, reshape = True):
 

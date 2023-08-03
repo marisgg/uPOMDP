@@ -233,7 +233,7 @@ class MDPWrapper(Wrapper):
             rewards = np.zeros_like((self.action_values))
         self.action_values[transitions] = np.sum(self.T[transitions] * self.state_values, axis = -1) + rewards[transitions]
 
-        utils.inform('Synthesized MDP-policy w/ value range (%.2f' % check.min + ', %.2f)' % check.max + ' & OPT = %.2f' % self.state_values[0])
+        # utils.inform('Synthesized MDP-policy w/ value range (%.2f' % check.min + ', %.2f)' % check.max + ' & OPT = %.2f' % self.state_values[0])
 
 
 class PDTMCModelWrapper(Wrapper):

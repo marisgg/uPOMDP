@@ -125,7 +125,7 @@ class Instance:
                     value = np.random.uniform(lb, ub, size = 1)[0]
                 p_values[p] = value
             string = ''.join([f'{key} = %.2f ' % p_values[key] for key in p_values])
-            utils.inform('Instantiating POMDP with ' + string)
+            # utils.inform('Instantiating POMDP with ' + string)
         elif ps is not None:
             utils.inform('Trying to instantiate an MDP that is not parametric.', itype = 'WARNING')\
 
