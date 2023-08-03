@@ -11,5 +11,5 @@ for filename in load_file:
          for policy in ["qumdp", "umdp"]:
             cfg["policy"] = policy
             cfg['a_loss'] = loss
-            exp = Experiment("initial_test" + cfg["name"] + policy + loss, cfg, 100)
+            exp = Experiment("LP_TEST_" + cfg["name"] + policy + loss, cfg, 100)
             exp.execute(False)

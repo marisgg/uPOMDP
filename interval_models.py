@@ -1,6 +1,7 @@
 from __future__ import annotations
 from collections import deque
 from fsc import FiniteMemoryPolicy
+from instance import Instance
 
 from models import POMDPWrapper
 
@@ -44,9 +45,6 @@ class IPOMDP:
         assert not (self.T_upper[np.nonzero(self.T_upper)].sum(axis=-1) < 1).any(), self.T_upper[self.T_upper.sum(axis=-1) < 1]
 
         self.reward_zero_states, self.reward_inf_states = self.preprocess(target_states)
-
-        print(self.reward_zero_states, self.reward_inf_states)
-
         self.imdp_Q = None
         self.imdp_V = None
 
@@ -82,42 +80,45 @@ class IPOMDP:
         assert not (T_inner < 0).any()
         return T_inner
 
-    @staticmethod
-    def is_diagonally_dominant(x):
-        abs_x = np.abs(x)
-        return np.all( 2*np.diag(abs_x) >= np.sum(abs_x, axis=1) )
-
-    def find_critical_pomdp_transitions(self, MC_T, fsc : FiniteMemoryPolicy, add_noise = 0):
+    def find_critical_pomdp_transitions(self, V : np.ndarray, instance : Instance, MC_T, fsc : FiniteMemoryPolicy, add_noise = 0):
         nM = fsc.nM_generated
-        assert fsc.is_masked
+        if not fsc.is_masked:
+            fsc.mask(instance.pomdp.policy_mask, zero = add_noise)
         next_memories = fsc.randomized_next_memories(add = add_noise)
         assert np.allclose(next_memories.sum(axis=-1), 1)
 
         assert MC_T.shape == (self.nS * nM, self.nS * nM)
 
         LP = mip.Model(solver_name=mip.CBC)
-        # acts = [ m.add_var(var_type=mip.INTEGER) for i in range(graph.num_agents) ]
 
-        T = np.array([[[[LP.add_var(var_type='C', lb=0, ub=1) for _ in range(self.nA)] for _ in range(nM)] for _ in range(self.nS)] for _ in range(self.nS)])
+        T = np.array([[[[LP.add_var(var_type='C', lb=0, ub=1) for _ in range(self.nS)] for _ in range(self.nA)] for _ in range(self.nS)] for _ in range(nM)])
 
-        assert T.shape == (self.nS, self.nS, nM, self.nA)
+        assert T.shape == (nM, self.nS, self.nA, self.nS)
+        assert -1 in instance.pomdp.T
 
-        for s in range(self.nS):
-            for s_ in range(self.nS):
-                # LP += mip.xsum(mip.xsum(T[s, s_, n, a] for n in range(nM)) for a in range(self.nA)) <= 1
-                for n in range(nM):
-                    # LP += mip.xsum(T[s, s_, n, a] for a in range(self.nA)) <= 1
-                    for a in range(self.nA):
-                        pass
-                        # LP += float(self.T_lower[s, a, s_]) <= T[s, s_, n, a]
-                        # LP += T[s, s_, n, a] <= float(self.T_upper[s, a, s_])
+        for n in range(nM):
+            for s in range(self.nS):
+                for a in range(self.nA):
+                    if not instance.mdp.A[s, a]: # If there is actually a transition from this (s, a) pair in the model
+                        LP += mip.xsum(T[n, s, a, s_] for s_ in range(0, self.nS)) <= 1
+                        LP += mip.xsum(T[n, s, a, s_] for s_ in range(0, self.nS)) >= 1 
+                    for s_ in range(0, self.nS):
+                        if np.isclose(instance.pomdp.T[s, a, s_], -1): # parametric, set to interval
+                            LP += float(self.T_lower[s, a, s_]) <= T[n, s, a, s_]
+                            LP += T[n, s, a, s_] <= float(self.T_upper[s, a, s_])
+                        else: # non-parametric, set to true prob
+                            LP += T[n, s, a, s_] <= float(instance.pomdp.T[s, a, s_])
+                            LP += T[n, s, a, s_] >= float(instance.pomdp.T[s, a, s_])
 
         for s in range(self.nS):
             o = self.pPOMDP.O[s]
+            # a = np.argmax(V[s])
             for m in range(nM):
                 prod_state = s * nM + m
-                # for a in range(self.nA):
-                if True:
+                for a in range(self.nA):
+                    if np.isclose(fsc.action_distributions[m, o, a], 0) or instance.mdp.A[s, a]:
+                        continue
+                # if True:
                 # for action in self.pPOMDP.model.states[s].actions:
                     # a = action.id
                     for next_s in range(self.nS):
@@ -126,36 +127,26 @@ class IPOMDP:
                         for next_m in range(nM):
                             prod_next_state = next_s * nM + next_m
                             chain_prob = float(MC_T[prod_state, prod_next_state])
-                            # if chain_prob > 0 and memory_prob > 0 and action_prob > 0:
-                            # T[s, a, s] += chain_prob / action_prob / memory_prob
-                            a = np.argmax(fsc.action_distributions[m, o, a])
-                            bound = T[s][next_s][m][a] * 1 * float(next_memories[m, o, next_m])
-                            # bound = T[s][next_s][m][a] * float(fsc.action_distributions[m, o, a]) * float(next_memories[m, o, next_m])
+                            # a = np.argmax(fsc.action_distributions[m, o])
+                            bound = T[m][s][a][next_s] * float(next_memories[m, o, next_m])
+                            # bound = T[m][s][a][next_s] * float(fsc.action_distributions[m, o, a]) * float(next_memories[m, o, next_m])
                             LP += chain_prob >= bound
                             LP += chain_prob <= bound
-                            # if T[s, a, next_s] > 0:
-                            #     if prob > 0:
-                            #         T[s, a, next_s] *= prob
-                            # else:
-                            #     T[s, a, next_s] = prob
-                            # if T[s,a,next_s] > 1:
-                            #     print(chain_prob, memory_prob, action_prob)
-        # LP.objective = mip.maximize(mip.xsum(mip.xsum(mip.xsum(T[s][s_][a] for a in range(self.nA)) for s_ in range(self.nS)) for s in range(self.nS)))
-        print(LP.optimize())
+        LP.verbose = 0 # surpress output
+        result = LP.optimize()
+
+        assert result in {mip.OptimizationStatus.FEASIBLE, mip.OptimizationStatus.OPTIMAL}, result
 
         T = np.vectorize(lambda x : x.x)(T)
 
-        print(T)
+        assert None not in T
 
-        print(T.sum(axis=-2).sum(axis=-1))
-
-        assert np.allclose(T.sum(axis=-2).sum(axis=-1), 1)
-
-        assert (np.logical_and(self.T_lower <= T, T <= self.T_upper)).all()
+        for n in range(nM):
+            assert (np.logical_and(self.T_lower <= T[n], T[n] <= self.T_upper)).all()
 
         return T
 
-    def create_iDTMC(self, fsc : FiniteMemoryPolicy, add_noise = 0) -> tuple[np.ndarray, np.ndarray]:
+    def create_iDTMC(self, fsc : FiniteMemoryPolicy, add_noise = 0, debug = False) -> tuple[np.ndarray, np.ndarray]:
         nM = fsc.nM_generated
         fsc.mask(self.pPOMDP.policy_mask)
 
@@ -164,7 +155,6 @@ class IPOMDP:
         MC_C = np.zeros_like(MC_T_lower, dtype=float)
         MC_D = np.zeros_like(MC_C, dtype=float)
         MC_P = np.zeros_like(MC_D, dtype=bool)
-        MC_TEMPT = np.zeros_like(MC_T_upper, dtype=float)
         rewards = np.full((self.nS * nM), None)
 
         observations_label_set = set.union(*[set(s) for s in self.pPOMDP.observation_labels])
@@ -221,8 +211,8 @@ class IPOMDP:
 
         assert (MC_T_lower <= MC_T_upper).all()
 
-        print("Lower non-zero/total", np.count_nonzero(MC_T_lower),np.size(MC_T_lower))
-        print("Upper non-zero/total", np.count_nonzero(MC_T_upper),np.size(MC_T_upper))
+        if debug: print("Lower non-zero/total", np.count_nonzero(MC_T_lower),np.size(MC_T_lower))
+        if debug: print("Upper non-zero/total", np.count_nonzero(MC_T_upper),np.size(MC_T_upper))
 
         return IDTMC(MC_T_lower, MC_T_upper, MC_C, MC_D, MC_P, rewards, state_labels, memory_labels, labels_to_states)
 
@@ -253,8 +243,6 @@ class IPOMDP:
                     if next_state not in reward_inf_states and self.T_lower[state, act, next_state] > 0:
                         reward_inf_states.add(next_state)
                         not_reaching_target_states.append(next_state)
-        
-        print(reward_inf_states, not_reaching_target_states, reachability_vector)
 
         return reward_zero_states, reward_inf_states
 
@@ -275,8 +263,7 @@ class IPOMDP:
             error = 1.0
             iters = 0
             while error > epsilon and iters < max_iters:
-                order = np.argsort(V)
-                order = order if min else order[::-1]
+                order = IDTMC.get_direction(spec, np.argsort(V))
 
                 v_next = np.zeros(self.nS)
                 q_next = np.zeros((self.nS, self.nA))
@@ -419,64 +406,45 @@ class IDTMC:
                     reward_inf_states.add(next_state)
                     not_reaching_target_states.append(next_state)
 
-        return reward_zero_states, reward_inf_states, IDTMC.get_direction(spec)
+        return reward_zero_states, reward_inf_states
 
-    def get_direction(spec : MDPSpec):
+    @staticmethod
+    def get_direction(spec : MDPSpec, order : np.ndarray):
         """
         Nature's direction given the optimization target of the uMDP.
         """
-        if spec == MDPSpec.Rmaxmax or spec == MDPSpec.Rminmin:
-            return 1 # optimistic
+        if spec in {MDPSpec.Rmaxmax, MDPSpec.Rminmin}:
+            return order[::-1] # reverse for optimistic
         else:
-            return -1
+            return order
 
     def find_transition_model(self, V : np.ndarray, spec : MDPSpec):
         nb_states = self.T_lower.shape[0]
         T = np.zeros(self.T_lower.shape)
-        order = np.argsort(V)
 
-        if IDTMC.get_direction(spec) == 1:
-            # reverse for optimistic
-            order = order[::-1]
+        order = IDTMC.get_direction(spec, np.argsort(V))
 
         for s in range(nb_states):
             T[s] = IPOMDP.solve_inner_problem(order, self.T_lower[s], self.T_upper[s])
 
         return T
 
-    def find_critical_parameter(self, T):
-        print((self.T_lower <= T).all(), (T <= self.T_upper).all())
-        print(np.unique((T - self.C / self.D)[self.P]))
-        print(np.allclose(T.sum(axis=-1), 1))
-        for s in range(T.shape[0]):
-            for s_ in range(T.shape[0]):
-                if self.P[s, s_] and self.D[s, s_] != 0:
-                    print("p =", (T[s, s_] - self.C[s, s_]) / self.D[s, s_], end=', ')
-        print(T)
-        exit()
-        # Go from C + Dx = T to Dx = T - C
-        # P = np.linalg.solve(self.D, T - self.C)
-        # P = np.linalg.lstsq(self.D, T - self.C, rcond=None)[0]
-        # print(np.unique(P))
-        # assert np.allclose(self.C + np.dot(self.D, P), T)
-
-    def check_reward(self, spec : MDPSpec, target : set, epsilon=1e-6, max_iters=1e1):
+    def check_reward(self, spec : MDPSpec, target : set, epsilon=1e-6, max_iters=1e2):
         if spec is not MDPSpec.Rminmax:
             raise NotImplementedError()
-        assert self.R[target].sum() == 0
+        if spec in {MDPSpec.Rminmax, MDPSpec.Rminmin}:
+            assert self.R[target].sum() == 0
         nb_states = self.T_lower.shape[0]
         V = np.zeros(nb_states)
-        reward_zero_states, reward_inf_states, nature_direction = self.preprocess(spec, target)
+        reward_zero_states, reward_inf_states = self.preprocess(spec, target)
 
         assert (self.T_lower <= self.T_upper).all()
 
         error = 1.0
         iters = 0
         while error > epsilon and iters < max_iters:
-            order = np.argsort(V)
-            if nature_direction == 1:
-                # reverse for optimistic
-                order = order[::-1]
+
+            order = IDTMC.get_direction(spec, np.argsort(V))
 
             v_next = np.zeros(nb_states)
             for s in range(nb_states):

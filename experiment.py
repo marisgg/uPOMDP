@@ -11,6 +11,7 @@ import pycarl
 from joblib import Parallel, delayed
 from mem_top import mem_top
 import inspect
+from fsc import FiniteMemoryPolicy
 from interval_models import IDTMC, IPOMDP, MDPSpec
 from models import POMDPWrapper
 
@@ -75,15 +76,30 @@ class Experiment:
 
         print("POLICY:", cfg['policy'])
 
+        dynamic_uncertainty = True # TODO: Make config
+        deterministic_target_policy = True # TODO: Make config
+
+        if dynamic_uncertainty:
+            T = mdp.T.copy()
+        
+        spec = MDPSpec.Rminmax # TODO: Make config
+
         mdp_goal_states = [i for i, x in enumerate(mdp.state_labels) if instance.label_to_reach in x]
 
         ipomdp = IPOMDP(pomdp, cfg['p_bounds'], mdp_goal_states)
+        if 'u' in cfg['policy']:
+            ipomdp.mdp_action_values(spec)
+            utils.inform('Synthesized iMDP-policy w/ value OPT = %.2f' % ipomdp.imdp_V[0])
 
         for round_idx in range(cfg['rounds']):
 
             timesteps = np.repeat(np.expand_dims(np.arange(length), axis = 0), axis = 0, repeats = cfg['batch_dim'])
 
-            beliefs, states, hs, observations, policies, actions, rewards = net.simulate(pomdp, mdp, greedy = False, length = length)
+            if round_idx == 0 or not dynamic_uncertainty:
+                beliefs, states, hs, observations, policies, actions, rewards = net.simulate(pomdp, mdp, greedy = False, length = length)
+            else:
+                beliefs, states, hs, observations, policies, actions, rewards = net.simulate_with_dynamic_uncertainty(pomdp, T, fsc, greedy = False, length = length)
+
             num_actions = pomdp.num_choices_per_state[states]
 
             observation_labels = pomdp.observation_labels[observations]
@@ -107,12 +123,24 @@ class Experiment:
             utils.inform(f'{run_idx}-{round_idx}\t(QBN)\t\trloss \t%.4f' % r_loss[0] + '\t>>>> %3.4f' % r_loss[-1], indent = 0)
 
             fsc = net.extract_fsc(make_greedy = False, reshape = True)
-            idtmc : IDTMC = ipomdp.create_iDTMC(fsc, add_noise=0)
+            # deterministic_fsc = net.extract_fsc(make_greedy = True, reshape = True)
+            deterministic_fsc = FiniteMemoryPolicy(
+                fsc.action_distributions, fsc.next_memories,
+                make_greedy = True, reshape = True,
+                initial_observation = instance.pomdp.initial_observation)
+            idtmc : IDTMC = ipomdp.create_iDTMC(deterministic_fsc, add_noise=0)
+            randomized_idtmc : IDTMC = ipomdp.create_iDTMC(fsc, add_noise=0)
+            IV = idtmc.check_reward(spec, np.where(np.isin(idtmc.state_labels, np.unique(pomdp.labels_to_states[instance.label_to_reach])))[0])
+            randomized_IV = idtmc.check_reward(spec, np.where(np.isin(idtmc.state_labels, np.unique(pomdp.labels_to_states[instance.label_to_reach])))[0])
+            utils.inform(f'{run_idx}-{round_idx}\t(det.  %i-FSC)' % fsc.nM_generated + '\t\tiV \t%.4f' % IV[0], indent = 0)
+            utils.inform(f'{run_idx}-{round_idx}\t(rand. %i-FSC)' % fsc.nM_generated + '\t\tiV \t%.4f' % randomized_IV[0], indent = 0)
+            IT = idtmc.find_transition_model(IV, spec)
+            randomized_IT = randomized_idtmc.find_transition_model(IV, spec)
+            T = ipomdp.find_critical_pomdp_transitions(IV, instance, IT, deterministic_fsc, add_noise=0)
 
-            IV = idtmc.check_reward(MDPSpec.Rminmax, np.where(np.isin(idtmc.state_labels, np.unique(pomdp.labels_to_states[instance.label_to_reach])))[0])
-            utils.inform(f'{run_idx}-{round_idx}\t(%i-FSC)' % fsc.nM_generated + '\t\tiV \t%.4f' % IV[0], indent = 0)
-            IT = idtmc.find_transition_model(IV, MDPSpec.Rminmax)
-            T = ipomdp.find_critical_pomdp_transitions(IT, fsc, add_noise=0)
+            for n in range(fsc.nM_generated):
+                # Assert a valid graph structure in the transition probabilities for all nodes.
+                assert (np.where(np.logical_or(T[n] == 0, T[n] == 1))[0] == np.where(np.logical_or(mdp.T == 0, mdp.T == 1))[0]).all(), T[n]
 
             pdtmc = instance.instantiate_pdtmc(fsc, zero = 0)
             fsc_memories, fsc_policies = fsc.simulate(observations)
@@ -151,9 +179,6 @@ class Experiment:
             elif cfg['ctrx_gen'] == 'crt_full' and pomdp.is_parametric:
                 # Maris: PSO for worst instantiation is done here.
                 mdp, worst_ps, worst_value = instance.worst_mdp(check, fsc)
-                # worst_ps = {}
-                # worst_value = -1
-                # pass
             else:
                 worst_value = -1
                 worst_ps = {}
@@ -172,12 +197,14 @@ class Experiment:
                 assert beliefs.shape[-1] == q.shape[0], "Shape mismatch."
                 q_values = np.matmul(beliefs, q)
             elif cfg['policy'].lower() == 'umdp':
-                mdp_q_values = ipomdp.mdp_action_values(MDPSpec.Rminmax)
+                mdp_q_values = ipomdp.imdp_Q
+                assert mdp_q_values is not None
                 mdp_q_values[mdp.A] = nan_fixer
                 assert mdp_q_values.shape == mdp.action_values.shape
                 q_values = mdp_q_values[states]
             elif cfg['policy'].lower() == 'qumdp':
-                mdp_q_values = ipomdp.mdp_action_values(MDPSpec.Rminmax)
+                mdp_q_values = ipomdp.imdp_Q
+                assert mdp_q_values is not None
                 mdp_q_values[mdp.A] = nan_fixer
                 assert mdp_q_values.shape == mdp.action_values.shape
                 assert beliefs.shape[-1] == mdp_q_values.shape[0], "Shape mismatch."
@@ -185,18 +212,16 @@ class Experiment:
             else:
                 raise ValueError("invalid policy")
 
-            # print(ipomdp.mdp_action_values(MDPSpec.Rminmax))
-            # print(mdp.action_values)
-
-            # print(np.where(np.nanargmin(mdp.action_values, axis = -1) != ipomdp.mdp_action_values(MDPSpec.Rminmax)))
 
             if 'u' in cfg['policy']:
                 print("iMDP value:", mdp_q_values[mdp.initial_state].min() if instance.objective == 'min' else q_values[mdp.initial_state].max())
+            
+            nanarg = np.nanargmin if instance.objective == 'min' else np.nanargmax
 
-            if instance.objective == 'min':
-                a_labels = utils.one_hot_encode(np.nanargmin(q_values, axis = -1), pomdp.nA, dtype ='float32')
+            if deterministic_target_policy:
+                a_labels = utils.one_hot_encode(nanarg(q_values, axis = -1), pomdp.nA, dtype ='float32')
             else:
-                a_labels = utils.one_hot_encode(np.nanargmax(q_values, axis = -1), pomdp.nA, dtype ='float32')
+                a_labels = utils.normalize(q_values, axis=-1)
 
             a_inputs = utils.one_hot_encode(observations, pomdp.nO, dtype = 'float32')
             # TRAIN RNN + Actor
