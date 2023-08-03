@@ -1,5 +1,6 @@
 from __future__ import annotations
 from collections import deque
+import multiprocessing
 import warnings
 from fsc import FiniteMemoryPolicy
 from instance import Instance
@@ -50,6 +51,10 @@ class IPOMDP:
         self.imdp_V = None
 
     @staticmethod
+    def compute_robust_value(R, V, order, lower, upper):
+        return R + IPOMDP.solve_inner_problem(order, lower, upper) @ V
+
+    @staticmethod
     def solve_inner_problem(order, P_low, P_up):
         nS = len(order)
         T_inner = np.zeros(nS)
@@ -81,7 +86,7 @@ class IPOMDP:
         assert not (T_inner < 0).any()
         return T_inner
 
-    def find_critical_pomdp_transitions(self, V : np.ndarray, instance : Instance, MC_T, fsc : FiniteMemoryPolicy, add_noise = 0):
+    def find_critical_pomdp_transitions(self, V : np.ndarray, instance : Instance, MC_T, fsc : FiniteMemoryPolicy, add_noise = 0, tolerance = 1e-6):
         nM = fsc.nM_generated
         if not fsc.is_masked:
             fsc.mask(instance.pomdp.policy_mask, zero = add_noise)
@@ -149,8 +154,8 @@ class IPOMDP:
                                     # assert not instance.mdp.A[s, a]
                                     # actions.append(a)
                             bound = mip.xsum([T[m][s][a][next_s] * float(fsc.action_distributions[m, o, a]) * float(next_memories[m, o, next_m]) for a in range(self.nA) if not instance.mdp.A[s, a]])
-                            LP += chain_prob + 1e-6 >= bound
-                            LP += chain_prob - 1e-6 <= bound
+                            LP += chain_prob + tolerance >= bound
+                            LP += chain_prob - tolerance <= bound
 
         LP.verbose = 0 # surpress output
         result = LP.optimize()
@@ -168,7 +173,7 @@ class IPOMDP:
         # print(np.round(T, decimals=2), file=open(f'./debug.txt', 'w'))
         for n in range(nM):
             # print(np.concatenate((np.round(T[n], decimals=2)[...,np.newaxis],instance.mdp.T[...,np.newaxis]),axis=-1), file=open(f'./n-debug.txt', 'w'))
-            assert (np.logical_and(np.logical_or(self.T_lower < T[n], np.isclose(T[n], self.T_lower, atol=1e-6)), np.logical_or(T[n] < self.T_upper, np.isclose(T[n], self.T_upper, atol=1e-6)))).all(), T[n][np.logical_and(np.logical_or(self.T_lower < T[n], np.isclose(T[n], self.T_lower)), np.logical_or(T[n] < self.T_upper, np.isclose(T[n], self.T_upper)))]
+            assert (np.logical_and(np.logical_or(self.T_lower < T[n], np.isclose(T[n], self.T_lower, atol=1e-10)), np.logical_or(T[n] < self.T_upper, np.isclose(T[n], self.T_upper, atol=1e-10)))).all(), T[n][np.logical_and(np.logical_or(self.T_lower < T[n], np.isclose(T[n], self.T_lower, atol=1e-10)), np.logical_or(T[n] < self.T_upper, np.isclose(T[n], self.T_upper, atol=1e-10)))]
         return T
 
     def create_iDTMC(self, fsc : FiniteMemoryPolicy, add_noise = 0, debug = False) -> tuple[np.ndarray, np.ndarray]:
@@ -177,9 +182,7 @@ class IPOMDP:
 
         MC_T_lower = np.zeros((self.nS * nM, self.nS * nM), dtype = 'float64') # Holds the transition matrix for the Markov chain (nS x nM)
         MC_T_upper = np.zeros_like(MC_T_lower)
-        MC_C = np.zeros_like(MC_T_lower, dtype=float)
-        MC_D = np.zeros_like(MC_C, dtype=float)
-        MC_P = np.zeros_like(MC_D, dtype=bool)
+
         rewards = np.full((self.nS * nM), None)
 
         observations_label_set = set.union(*[set(s) for s in self.pPOMDP.observation_labels])
@@ -312,9 +315,7 @@ class IPOMDP:
                         elif self.pPOMDP.A[s, a]:
                             q_next[s, a] = np.inf
                         else:
-                            T_inner = IPOMDP.solve_inner_problem(order, self.T_lower[s, a], self.T_upper[s, a])
-                            # T_inner = self.inner_problem(order, s, a)
-                            q_next[s, a] = self.R[s] + np.inner(T_inner, V)
+                            q_next[s, a] = IPOMDP.compute_robust_value(self.R[s], V, order, self.T_lower[s, a], self.T_upper[s, a])
 
                     v_next[s] = q_next[s].min() if min else q_next[s].max()
 
@@ -449,7 +450,7 @@ class IDTMC:
         if spec in {MDPSpec.Rmaxmax, MDPSpec.Rminmin}:
             return order
         else:
-            return order[::-1] # reverse for optimistic
+            return order[::-1] # reverse for pessimistic
 
     def find_transition_model(self, V : np.ndarray, spec : MDPSpec):
         nb_states = self.T_lower.shape[0]
@@ -475,32 +476,30 @@ class IDTMC:
 
         unreachable_states = set(self.unreachable_states.tolist())
 
-        if len(reward_zero_states - unreachable_states) != 0:
-            print(reward_inf_states)
-            warnings.warn("There are no reachable target states in the Markov chain.")
+        # if len(reward_zero_states - unreachable_states) != 0:
+        #     print(reward_inf_states, unreachable_states)
+        #     print("!!!! There are no reachable target states in the Markov chain. !!!!")
 
         assert (self.T_lower <= self.T_upper).all()
 
-        infinity = np.inf
-
         error = 1.0
         iters = 0
+
         while error > epsilon and iters < max_iters:
 
             order = IDTMC.get_direction(spec, np.argsort(V))
-
             v_next = np.zeros(nb_states)
+
             for s in range(nb_states):
                 if s in reward_zero_states:
                     v_next[s] = 0
                 elif s in reward_inf_states:
-                    v_next[s] = infinity
+                    v_next[s] = np.inf
                 # elif s in unreachable_states:
                     # v_next[s] = infinity
                 else:
-                    assert (self.T_lower[s] <= self.T_upper[s]).all()
-                    T_inner = IPOMDP.solve_inner_problem(order, self.T_lower[s], self.T_upper[s])
-                    v_next[s] = self.R[s] + T_inner @ V # inner product via numpy
+                    v_next[s] = IPOMDP.compute_robust_value(self.R[s], V, order, self.T_lower[s], self.T_upper[s])
+
             error = np.abs(v_next - V).max()
             V = v_next
             iters += 1

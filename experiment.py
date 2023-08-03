@@ -121,24 +121,17 @@ class Experiment:
             utils.inform(f'{run_idx}-{round_idx}\t(RNN)\t\tempir\t%.4f' % empirical_result, indent = 0)
             utils.inform(f'{run_idx}-{round_idx}\t(QBN)\t\trloss \t%.4f' % r_loss[0] + '\t>>>> %3.4f' % r_loss[-1], indent = 0)
 
-            fsc, deterministic_fsc = net.extract_both_fscs(reshape=True)
-            assert np.allclose(fsc._next_memories, deterministic_fsc._next_memories)
-            # deterministic_idtmc : IDTMC = ipomdp.create_iDTMC(deterministic_fsc, add_noise=0)
-            randomized_idtmc : IDTMC = ipomdp.create_iDTMC(fsc, add_noise=0)
+            fsc = net.extract_fsc(reshape=True, make_greedy = False)
+            idtmc : IDTMC = ipomdp.create_iDTMC(fsc, add_noise=0)
 
-            randomized_IV = randomized_idtmc.check_reward(spec, np.where(np.isin(randomized_idtmc.state_labels, np.unique(pomdp.labels_to_states[instance.label_to_reach])))[0])
-            utils.inform(f'{run_idx}-{round_idx}\t(r. %i-FSC)' % fsc.nM_generated + '\tiMC-V \t%.4f' % randomized_IV[0], indent = 0)
+            V = idtmc.check_reward(spec, np.where(np.isin(idtmc.state_labels, np.unique(pomdp.labels_to_states[instance.label_to_reach])))[0])
+            utils.inform(f'{run_idx}-{round_idx}\t(%i-FSC)' % fsc.nM_generated + '\t\tiMC-V \t%.4f' % V[0], indent = 0)
 
-            # IV = deterministic_idtmc.check_reward(spec, np.where(np.isin(deterministic_idtmc.state_labels, np.unique(pomdp.labels_to_states[instance.label_to_reach])))[0])
-            # utils.inform(f'{run_idx}-{round_idx}\t(d. %i-FSC)' % fsc.nM_generated + '\tiMC-V \t%.4f' % IV[0], indent = 0)
-
-            # IT = deterministic_idtmc.find_transition_model(IV, spec)
-            randomized_IT = randomized_idtmc.find_transition_model(randomized_IV, spec)
-            # T = ipomdp.find_critical_pomdp_transitions(IV, instance, IT, deterministic_fsc, add_noise=0)
-            T = randomized_T = ipomdp.find_critical_pomdp_transitions(randomized_IV, instance, randomized_IT, fsc, add_noise=0)
+            iMC_worst_case_T = idtmc.find_transition_model(V, spec)
+            T = ipomdp.find_critical_pomdp_transitions(V, instance, iMC_worst_case_T, fsc, add_noise=0, tolerance=1e-6)
             for n in range(fsc.nM_generated):
                 # Assert a valid graph structure in the transition probabilities for all nodes.
-                assert np.array_equal(np.where(np.logical_or(np.isclose(T[n], 0, atol=1e-6), np.isclose(T[n], 1, atol=1e6)))[0], np.where(np.logical_or(np.isclose(mdp.T, 0, atol=1e-6), np.isclose(mdp.T, 1, atol=1e6)))[0]), T[n]
+                assert np.array_equal(np.where(np.logical_or(np.isclose(T[n], 0, atol=1e-10), np.isclose(T[n], 1, atol=1e-10)))[0], np.where(np.logical_or(np.isclose(mdp.T, 0, atol=1e-10), np.isclose(mdp.T, 1, atol=1e-10)))[0]), T[n]
 
             pdtmc = instance.instantiate_pdtmc(fsc, zero = 0)
             fsc_memories, fsc_policies = fsc.simulate(observations)
@@ -219,7 +212,9 @@ class Experiment:
             if deterministic_target_policy:
                 a_labels = utils.one_hot_encode(nanarg(q_values, axis = -1), pomdp.nA, dtype ='float32')
             else:
-                a_labels = utils.normalize(q_values, axis=-1)
+                q_values[mdp.A] = 0
+                exp = np.exp(q_values)
+                a_labels = exp / exp.sum()
 
             a_inputs = utils.one_hot_encode(observations, pomdp.nO, dtype = 'float32')
             # TRAIN RNN + Actor
