@@ -4,7 +4,7 @@ observables
 started, r1taken, r1lastobs , r2taken, r2lastobs, done, x, y
 endobservables
 
-const int N=4;
+const int N=3;
 const int xMAX = N-1;
 const int yMAX = N-1;
 const int xMIN = 0;

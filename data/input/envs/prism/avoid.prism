@@ -6,7 +6,7 @@ endobservables
 
 
 const int RADIUS=3;
-const int N=6;
+const int N=3;
 const int ARADIUS = 1;
 const int ayPOS = 2;
 const int ay2POS = N-2;

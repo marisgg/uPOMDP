@@ -1,3 +1,4 @@
+import pickle
 import matplotlib.pyplot as plt
 import seaborn as sns
 # plt.style.use(['science','ieee'])
@@ -488,8 +489,8 @@ class Log:
 
     @staticmethod
     def output_benchmark_table(logs, dir):
-
         num_logs = len(logs)
+        print(logs, np.array(logs).shape)
         run_logs = np.array(logs).reshape(int(num_logs / logs[0].num_runs), logs[0].num_runs)
 
         output = {}
@@ -500,10 +501,12 @@ class Log:
             cum_rewards = []
             evalues = []
             ks = []
+            mc_values = []
             for log in run_log:
                 (not_nans, ) = np.where(np.logical_not(np.isnan(log.result_at_init)))
                 last_valid_index = not_nans[-1]
                 results_at_init.append(log.result_at_init)
+                mc_values.append(log.interval_mc_value)
                 durations.append(log.duration)
                 # values.append(log.value_at_init[last_valid_index])
                 cum_rewards.append(log.cum_rewards)
@@ -518,14 +521,26 @@ class Log:
                     'median' : np.median(arr)
                 }
             # plot_label = run_log[0].plot_label
+            evalues = np.array(evalues).squeeze()
+            print(evalues.shape)
             output['table'] = {
+                # 'stats' :{
+                'interval_mc_value' : dict_helper(mc_values),
                 'result_at_init' : dict_helper(results_at_init),
                 'duration' : dict_helper(durations),
                 # 'value' : dict_helper(values),
                 'cum_reward' : dict_helper(cum_rewards),
                 'evalues' : dict_helper(evalues),
                 'k' : dict_helper(ks),
-                }
+                # },
+                # 'imc_values' : np.array(mc_values).ravel(),
+                # 'e_values_0.1' : evalues[:, 0],
+                # 'e_values_0.2' : evalues[:, 1],
+                # 'e_values_0.3' : evalues[:, 2],
+                # 'e_values_0.4' : evalues[:, 3],
+                # 'empirical_cum_cost' : np.array(cum_rewards).ravel(),
+                # 'ks' : np.array(ks).ravel()
+            }
 
         with open(f'{dir}/table.json', 'w+') as fp:
             json.dump(output, fp, indent = 4, default=float)
@@ -657,6 +672,9 @@ class Log:
         plt.close()
 
 def pdtmc_string(parametric_string, nS, nM, transitions_strings, label_strings, reward_str):
+    return _pdtmc_string(parametric_string, nS * nM, transitions_strings, label_strings, reward_str)
+
+def _pdtmc_string(parametric_string, MC_STATES, transitions_strings, label_strings, reward_str):
     contents = f"""
 dtmc
 
@@ -664,7 +682,7 @@ dtmc
 
 module die
 
-    s : [0..{nS * nM - 1}] init 0;
+    s : [0..{MC_STATES - 1}] init 0;
 
     {transitions_strings}
 

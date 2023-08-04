@@ -6,7 +6,7 @@ endobservables
 
 const int RADIUS=1;
 
-const int N=7;
+const int N=3;
 const int xMAX = N-1;
 const int yMAX = N-1;
 const int axMAX = xMAX;
@@ -41,10 +41,9 @@ observable "seedy" = (laserdet | seedrone) ? ay : -1;
 
 
 module master
-    start : bool init false;
+    start : bool init true;
     turn : bool init false;
 
-    [placement] !start -> (start'=true);
     [north] start & turn -> (turn'=!turn);
     [south] start & !done & turn -> (turn'=!turn);
     [east]  start & !done & turn -> (turn'=!turn);
@@ -55,8 +54,8 @@ endmodule
 
 
 module drone
-    dx : [dxMIN..dxMAX] init 0;
-    dy : [dyMIN..dyMAX] init 3;
+    dx : [dxMIN..dxMAX] init dyMIN;
+    dy : [dyMIN..dyMAX] init dyMIN;
 
     [west] true -> (1-sl): (dx'=max(dx-1,dxMIN)) + sl: (dx'=max(dx,dxMIN));
     [east] true -> (1-sl): (dx'=min(dx+1,dxMAX)) + sl: (dx'=min(dx,dxMAX));

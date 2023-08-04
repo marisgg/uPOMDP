@@ -1,7 +1,9 @@
 from __future__ import annotations
 from collections import deque
+from datetime import datetime
 import multiprocessing
 import warnings
+import in_out
 from fsc import FiniteMemoryPolicy
 from instance import Instance
 
@@ -14,6 +16,8 @@ from utils import value_to_float
 from enum import Enum
 
 import mip
+
+USE_PRISM = True
 
 class MDPSpec(Enum):
     """
@@ -38,13 +42,14 @@ class IPOMDP:
         self.state_labeling, self.reward_models = pPOMDP.model_reward_and_labeling(True)
         assert len(self.reward_models) == 1, "Only supporting rewards/costs as of yet."
         self.R = np.array(self.reward_models[0])
+        self.state_action_rewards = len(self.R.shape) > 1
         assert len(self.T_lower) == len(self.T_lower) == len(self.R) == pPOMDP.nS, (len(self.T_lower), len(self.T_lower), len(self.R), pPOMDP.nS)
 
         self.nS = pPOMDP.nS
         self.nA = pPOMDP.nA
 
-        assert not (self.T_lower.sum(axis=-1) > 1).any(), self.T_lower[self.T_lower.sum(axis=-1) > 1]
-        assert not (self.T_upper[np.nonzero(self.T_upper)].sum(axis=-1) < 1).any(), self.T_upper[self.T_upper.sum(axis=-1) < 1]
+        assert not (self.T_lower.sum(axis=-1) > 1 + 1e-6).any(), self.T_lower[self.T_lower.sum(axis=-1) > 1 + 1e-6]
+        assert not (self.T_upper[np.nonzero(self.T_upper)].sum(axis=-1) < 1 - 1e-6).any(), self.T_upper[self.T_upper.sum(axis=-1) < 1 - 1e-6]
 
         self.reward_zero_states, self.reward_inf_states = self.preprocess(target_states)
         self.imdp_Q = None
@@ -61,7 +66,7 @@ class IPOMDP:
 
         i = 0
         t = order[i]
-        limit = np.sum(P_low)
+        limit = P_low.sum()
 
         assert (P_low <= P_up).all(), (P_low, P_up)
 
@@ -71,7 +76,6 @@ class IPOMDP:
 
         while not np.isclose(limit - P_low[t] + P_up[t], 1) and limit - P_low[t] + P_up[t] < 1:
             limit = limit - P_low[t] + P_up[t]
-            # limit = np.round(limit, decimals=5)
             T_inner[t] = P_up[t]
             i += 1
             t = order[i]
@@ -99,33 +103,44 @@ class IPOMDP:
 
         deterministic_fsc = fsc.is_made_greedy
 
-        T = np.array([[[[LP.add_var(var_type='C', lb=0, ub=1) for _ in range(self.nS)] for _ in range(self.nA)] for _ in range(self.nS)] for _ in range(nM)])
+        # T = np.array([[[[LP.add_var(var_type='C', lb=0, ub=1) for _ in range(self.nS)] for _ in range(self.nA)] for _ in range(self.nS)] for _ in range(nM)])
+
+        T = np.full((nM, self.nS, self.nA, self.nS), None)
 
         assert T.shape == (nM, self.nS, self.nA, self.nS)
-        assert -1 in instance.pomdp.T
-
-        for n in range(nM):
-            for s in range(0, self.nS):
-                for a in range(self.nA):
-                    if not instance.mdp.A[s, a]: # If there is actually a transition from this (s, a) pair in the model
-                        LP += mip.xsum(T[n, s, a, s_] for s_ in range(0, self.nS)) <= 1
-                        LP += mip.xsum(T[n, s, a, s_] for s_ in range(0, self.nS)) >= 1 
-                    for s_ in range(0, self.nS):
-                        if self.P[s, a, s_]: # parametric, set to interval
-                            assert self.pPOMDP.T[s, a, s_] == -1
-                            LP += float(self.T_lower[s, a, s_]) <= T[n, s, a, s_]
-                            LP += T[n, s, a, s_] <= float(self.T_upper[s, a, s_])
-                        else: # non-parametric, set to true prob
-                            assert self.pPOMDP.T[s, a, s_] != -1
-                            LP += T[n, s, a, s_] <= float(instance.pomdp.T[s, a, s_])
-                            LP += T[n, s, a, s_] >= float(instance.pomdp.T[s, a, s_])
+        assert -1 in instance.pomdp.T                
 
         for s in range(self.nS):
             o = self.pPOMDP.O[s]
+            assert isinstance(o, np.int64)
             # a = np.argmin(V[s])
             for m in range(nM):
+                for a in range(self.nA):
+                    for s_ in range(0, self.nS):
+                        if self.P[s, a, s_]: # parametric, add variable and set constraints to interval
+                            if T[m, s, a, s_] is None:
+                                T[m, s, a, s_] = LP.add_var(var_type='C', lb=0, ub=1)
+                            assert self.pPOMDP.T[s, a, s_] == -1
+                            LP += float(self.T_lower[s, a, s_]) <= T[m, s, a, s_] 
+                            LP += T[m, s, a, s_] <= float(self.T_upper[s, a, s_]) 
+                        else: # non-parametric, set to true prob
+                            assert self.pPOMDP.T[s, a, s_] != -1
+                            # assert s == 0 or np.isclose(instance.pomdp.T[s, a, s_], 0) or np.isclose(instance.pomdp.T[s, a, s_], 1), instance.pomdp.T[s, a, s_]
+                            # LP += T[n, s, a, s_] <= float(instance.pomdp.T[s, a, s_])
+                            # LP += T[n, s, a, s_] >= float(instance.pomdp.T[s, a, s_])
+                            T[m, s, a, s_] = instance.pomdp.T[s, a, s_]
+                    if not instance.mdp.A[s, a]: # If there is actually a transition from this (s, a) pair in the model
+                        constraint = False
+                        for s_ in range(self.nS):
+                            if T[m, s, a, s_] is not None:
+                                constraint = True
+                        assert np.isclose(instance.mdp.T[s, a].sum(), 1)
+                        if constraint: # We only need a constraint if there is a parameter/interval transition in this density.
+                            LP += mip.xsum(T[m, s, a, s_] for s_ in range(0, self.nS)) <= 1 + tolerance
+                            LP += mip.xsum(T[m, s, a, s_] for s_ in range(0, self.nS)) >= 1 - tolerance
                 prod_state = s * nM + m
                 if deterministic_fsc:
+                    assert False
                     # for action in self.pPOMDP.model.states[s].actions:
                         # a = action.id
                     for a in range(self.nA):
@@ -147,33 +162,35 @@ class IPOMDP:
                         for next_m in range(nM):
                             prod_next_state = next_s * nM + next_m
                             chain_prob = float(MC_T[prod_state, prod_next_state])
-                            actions = []
+                            # actions = []
                             # for a in range(self.nA):
                             # for action in self.pPOMDP.model.states[s].actions:
                                 # if (a in list(map(lambda x : x.id, self.pPOMDP.model.states[s].actions)) and next_s in list(map(lambda x : x.column, a.transitions))):
                                     # assert not instance.mdp.A[s, a]
                                     # actions.append(a)
                             bound = mip.xsum([T[m][s][a][next_s] * float(fsc.action_distributions[m, o, a]) * float(next_memories[m, o, next_m]) for a in range(self.nA) if not instance.mdp.A[s, a]])
-                            LP += chain_prob + tolerance >= bound
-                            LP += chain_prob - tolerance <= bound
+                            LP += chain_prob >= bound - tolerance
+                            LP += chain_prob <= bound + tolerance
 
         LP.verbose = 0 # surpress output
         result = LP.optimize()
 
-        assert result in {mip.OptimizationStatus.FEASIBLE, mip.OptimizationStatus.OPTIMAL}, result
+        # import sys
+        # np.set_printoptions(threshold=sys.maxsize)
 
-        T = np.abs(np.vectorize(lambda x : x.x)(T))
+
+        if result not in {mip.OptimizationStatus.FEASIBLE, mip.OptimizationStatus.OPTIMAL}:
+            return None
+
+        T = np.abs(np.vectorize(lambda x : x.x if isinstance(x, mip.Var) else x)(T))
         # T = np.round(T, decimals=6)
 
         assert None not in T
 
-        # import sys
-        # np.set_printoptions(threshold=sys.maxsize)
-
         # print(np.round(T, decimals=2), file=open(f'./debug.txt', 'w'))
-        for n in range(nM):
+        # for n in range(nM):
             # print(np.concatenate((np.round(T[n], decimals=2)[...,np.newaxis],instance.mdp.T[...,np.newaxis]),axis=-1), file=open(f'./n-debug.txt', 'w'))
-            assert (np.logical_and(np.logical_or(self.T_lower < T[n], np.isclose(T[n], self.T_lower, atol=1e-10)), np.logical_or(T[n] < self.T_upper, np.isclose(T[n], self.T_upper, atol=1e-10)))).all(), T[n][np.logical_and(np.logical_or(self.T_lower < T[n], np.isclose(T[n], self.T_lower, atol=1e-10)), np.logical_or(T[n] < self.T_upper, np.isclose(T[n], self.T_upper, atol=1e-10)))]
+            # assert (np.logical_and(np.logical_or(self.T_lower < T[n], np.isclose(T[n], self.T_lower, atol=1e-10)), np.logical_or(T[n] < self.T_upper, np.isclose(T[n], self.T_upper, atol=1e-10)))).all(), T[n][np.logical_and(np.logical_or(self.T_lower < T[n], np.isclose(T[n], self.T_lower, atol=1e-10)), np.logical_or(T[n] < self.T_upper, np.isclose(T[n], self.T_upper, atol=1e-10)))]
         return T
 
     def create_iDTMC(self, fsc : FiniteMemoryPolicy, add_noise = 0, debug = False) -> tuple[np.ndarray, np.ndarray]:
@@ -229,7 +246,10 @@ class IPOMDP:
                             MC_T_lower[prod_state, prod_next_state] += self.T_lower[s, a, next_s] * fsc_prob
                             MC_T_upper[prod_state, prod_next_state] += self.T_upper[s, a, next_s] * fsc_prob
                             assert MC_T_lower[prod_state, prod_next_state] > 0 or np.isclose(MC_T_lower[prod_state, prod_next_state], MC_T_upper[prod_state, prod_next_state])
-                rewards[prod_state] = self.R[s]
+                if self.state_action_rewards:
+                    rewards[prod_state] = sum([fsc.action_distributions[m, o, a] * self.R[s, a] for a in range(self.nA)])
+                else:
+                    rewards[prod_state] = self.R[s]                        
     
         assert None not in rewards
         assert (MC_T_lower.sum(axis=-1) <= 1.0 + 1e-6).all(), (MC_T_lower.sum(axis=-1)[MC_T_lower.sum(axis=-1) > 1])
@@ -283,12 +303,12 @@ class IPOMDP:
 
         return reward_zero_states, reward_inf_states
 
-    def mdp_action_values(self, spec : MDPSpec, epsilon=1e-6, max_iters=1e3) -> np.ndarray:
+    def mdp_action_values(self, spec : MDPSpec, epsilon=1e-6, max_iters=1e4) -> np.ndarray:
         """
         Return the Q-values of the robust policy for the underlying interval MDP.
         """
-        if spec is not MDPSpec.Rminmax:
-            raise NotImplementedError()
+        if spec not in {MDPSpec.Rminmax, MDPSpec.Rminmin}:
+            raise NotImplementedError(spec)
         
         if self.imdp_Q is None or self.imdp_V is None:
 
@@ -315,7 +335,7 @@ class IPOMDP:
                         elif self.pPOMDP.A[s, a]:
                             q_next[s, a] = np.inf
                         else:
-                            q_next[s, a] = IPOMDP.compute_robust_value(self.R[s], V, order, self.T_lower[s, a], self.T_upper[s, a])
+                            q_next[s, a] = IPOMDP.compute_robust_value(self.R[s,a] if self.state_action_rewards else self.R[s], V, order, self.T_lower[s, a], self.T_upper[s, a])
 
                     v_next[s] = q_next[s].min() if min else q_next[s].max()
 
@@ -410,6 +430,48 @@ class IDTMC:
         assert self.R.ndim == 1
         assert (self.R >= 0).all() and not np.isinf(self.R).any()
 
+        if USE_PRISM:
+            self.materialized_idtmc_filename = self.to_prism_file()
+    
+    def to_prism_file(self):
+        all_trans_strings = ""
+        rewards_strings = ""
+        
+        for mc_s in range(self.T_lower.shape[0]):
+            trans_string = f"[] (s={mc_s}) -> " 
+            first = True
+            for mc_next_s in range(self.T_lower.shape[0]):
+                if self.T_lower[mc_s, mc_next_s] > 0:
+                    if first:
+                        first = False
+                    else:
+                        trans_string += " + "
+                    if np.isclose(self.T_lower[mc_s, mc_next_s], self.T_upper[mc_s, mc_next_s]):
+                        trans_string += f"{self.T_lower[mc_s, mc_next_s]} : (s'={mc_next_s})"
+                    else:
+                        trans_string += f"{[self.T_lower[mc_s, mc_next_s], self.T_upper[mc_s, mc_next_s]]} : (s'={mc_next_s})"
+            rewards_strings += f's={mc_s} : {self.R[mc_s]};\n'
+            if first:
+                trans_string = ""
+            else:
+                trans_string += ';\n'
+            
+            all_trans_strings += trans_string
+
+            
+        label_string = 'label "goal" ='
+        first = True
+        for s in self.labels_to_states["goal"]:
+            if first:
+                first = False
+            else:
+                label_string += " | "
+            label_string += f"(s={s})"
+        label_string += ';'
+        
+        file = in_out.cache_pdtmc(in_out._pdtmc_string("", self.T_lower.shape[0], all_trans_strings, label_string, rewards_strings))
+        return file
+
     def preprocess(self, target):
         reward_zero_states = set(target.tolist())
         num_mc_states = self.T_lower.shape[0]
@@ -454,16 +516,49 @@ class IDTMC:
 
     def find_transition_model(self, V : np.ndarray, spec : MDPSpec):
         nb_states = self.T_lower.shape[0]
-        T = np.zeros(self.T_lower.shape)
+        MC_T = np.zeros(self.T_lower.shape)
 
         order = IDTMC.get_direction(spec, np.argsort(V))
 
         for s in range(nb_states):
-            T[s] = IPOMDP.solve_inner_problem(order, self.T_lower[s], self.T_upper[s])
+            MC_T[s] = IPOMDP.solve_inner_problem(order, self.T_lower[s], self.T_upper[s])
+        
+        assert (np.logical_and(np.logical_or(self.T_lower < MC_T, np.isclose(MC_T, self.T_lower, atol=1e-6)), np.logical_or(MC_T < self.T_upper, np.isclose(MC_T, self.T_upper, atol=1e-6)))).all(), MC_T[np.logical_and(np.logical_or(self.T_lower < MC_T, np.isclose(MC_T, self.T_lower, atol=1e-6)), np.logical_or(MC_T < self.T_upper, np.isclose(MC_T, self.T_upper, atol=1e-6)))]
 
-        return T
+        return MC_T
 
     def check_reward(self, spec : MDPSpec, target : set, epsilon=1e-6, max_iters=1e3):
+        reachable_idxs = np.array([x for x in range(self.T_lower.shape[0]) if x not in self.unreachable_states])
+        if USE_PRISM:
+            dt_str = datetime.now().strftime("%Y%m%d%H%M%S%f")
+            value_file = f"data/cache/V-{dt_str}.txt"
+            import subprocess, os
+            if spec in {MDPSpec.Rminmax, MDPSpec.Rmaxmax}:
+                property = "Rmax=? [ F \"goal\" ]"
+            else:
+                property = "Rmin=? [ F \"goal\" ]"
+            output = subprocess.run(["prism/prism-4.8/bin/prism", self.materialized_idtmc_filename, "-maxiters", str(int(1e6)), "-zerorewardcheck", "-nocompact", "-pf", property, "-exportvector", value_file], check=True, capture_output=True)
+            V = np.zeros(self.T_lower.shape[0], dtype=float)
+            try:
+                with open(value_file, 'r') as input:
+                    prism_values = np.array([float(line.rstrip()) for line in input], dtype=float)
+            except Exception as error:
+                print("STDOUT:")
+                print(output.stdout.decode("utf-8"))
+                print("STDERR:")
+                print(output.stderr.decode("utf-8"))
+                raise error
+            os.remove(self.materialized_idtmc_filename)
+            os.remove(value_file)
+            assert prism_values.size + len(self.unreachable_states) == self.T_lower.shape[0], (V.size, len(self.unreachable_states), self.T_lower.shape[0])
+            V[self.unreachable_states] = np.inf
+            V[reachable_idxs] = prism_values
+            assert V.size == self.T_lower.shape[0], (V.size, self.T_lower.shape[0])
+            return V
+        else:
+            self.__check_reward(spec, target, epsilon=epsilon, max_iters=max_iters)
+
+    def __check_reward(self, spec : MDPSpec, target : set, epsilon=1e-6, max_iters=1e3):
         if spec is not MDPSpec.Rminmax:
             raise NotImplementedError()
 
@@ -474,11 +569,13 @@ class IDTMC:
         V = np.zeros(nb_states)
         reward_zero_states, reward_inf_states = self.preprocess(target)
 
-        unreachable_states = set(self.unreachable_states.tolist())
+        # self.unreachable_states = set(self.unreachable_states.tolist())
 
         # if len(reward_zero_states - unreachable_states) != 0:
         #     print(reward_inf_states, unreachable_states)
         #     print("!!!! There are no reachable target states in the Markov chain. !!!!")
+
+        hashmaps = {s : {} for s in range(nb_states) if s not in reward_inf_states.union(reward_zero_states)}
 
         assert (self.T_lower <= self.T_upper).all()
 
@@ -488,6 +585,7 @@ class IDTMC:
         while error > epsilon and iters < max_iters:
 
             order = IDTMC.get_direction(spec, np.argsort(V))
+            hashed_order = tuple(order.tolist())
             v_next = np.zeros(nb_states)
 
             for s in range(nb_states):
@@ -498,7 +596,18 @@ class IDTMC:
                 # elif s in unreachable_states:
                     # v_next[s] = infinity
                 else:
-                    v_next[s] = IPOMDP.compute_robust_value(self.R[s], V, order, self.T_lower[s], self.T_upper[s])
+                    if hashed_order in hashmaps[s]:
+                        T_inner = hashmaps[s][hashed_order]
+                    else:
+                        if np.allclose(self.T_lower, self.T_upper, atol=1e-6):
+                            T_inner = self.T_lower
+                        else:
+                            T_inner = IPOMDP.solve_inner_problem(order, self.T_lower[s], self.T_upper[s])
+                        hashmaps[s][hashed_order] = T_inner
+                    assert not np.isnan(T_inner).any(), T_inner
+                    assert not np.isnan(V).any(), V
+                    v_next[s] = self.R[s] + T_inner @ V
+                    # v_next[s] = IPOMDP.compute_robust_value(self.R[s], V, order, self.T_lower[s], self.T_upper[s])
 
             error = np.abs(v_next - V).max()
             V = v_next

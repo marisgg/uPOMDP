@@ -6,7 +6,7 @@ endobservables
 
 const int RADIUS=2;
 
-const int N=6;
+const int N=3;
 const int xMAX = N-1;
 const int yMAX = N-1;
 const int aXMAX = xMAX;
@@ -74,10 +74,11 @@ label "traps" = crash;
 label "notbad" =  !crash;
 
 rewards
-    [north] true : 0.01;
-    [south] true : 0.01;
-    [west] true : 0.01;
-    [east] true : 0.01;
-    [scan] true : 0.01;
-    crash = true:00; 
+    [north] true : 1;
+    [south] true : 1;
+    [west] true : 1;
+    [east] true : 1;
+    [scan] true : 1;
+    done : 0;
+    crash = true:100; 
 endrewards

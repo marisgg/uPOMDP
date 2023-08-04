@@ -1,3 +1,4 @@
+import warnings
 import stormpy
 import stormpy.pars
 import numpy as np
@@ -150,18 +151,31 @@ class Wrapper:
         reward_vectors = []
         for reward_model_name in self.reward_models:
             reward_model = self.reward_models[reward_model_name]
+            if reward_model.has_state_action_rewards:
+                reward_model.reduce_to_state_based_rewards(self.transition_matrix, only_state_rewards=False)
             if reward_model.has_state_rewards:
                 state_rewards = reward_model.state_rewards
-                state_rewards_vector = [utils.value_to_float(x) for x in state_rewards]
+                state_rewards_vector = np.array([utils.value_to_float(x) for x in state_rewards])
                 if return_raw_vectors: reward_vectors.append(state_rewards_vector)
                 reward_models[reward_model_name] = stormpy.SparseRewardModel(optional_state_reward_vector = state_rewards_vector)
             elif reward_model.has_state_action_rewards:
                 state_action_rewards = reward_model.state_action_rewards
-                state_action_rewards_vector = [utils.value_to_float(x) for x in state_action_rewards]
-                if return_raw_vectors: reward_vectors.append(state_action_rewards_vector)
+                state_action_rewards_vector = np.array([utils.value_to_float(x) for x in state_action_rewards])
+                if return_raw_vectors: 
+                    R = np.zeros((self.nS, self.nA))
+                    idx = 0
+                    for s in range(self.nS):
+                        num_actions = len(self.model.states[s].actions)
+                        for a in self.model.states[s].actions:
+                            a = a.id
+                            R[s,a] = utils.value_to_float(reward_model.get_state_action_reward(idx + a))
+                        idx += num_actions
+                    assert idx == len(state_action_rewards_vector)
+                    reward_vectors.append(R)
                 reward_models[reward_model_name] = stormpy.SparseRewardModel(optional_state_action_reward_vector = state_action_rewards_vector)
             else:
                 raise NotImplementedError('To implement.')
+        
         return labeling, reward_vectors if return_raw_vectors else reward_models
 
     def model_components(self, p_values = None):

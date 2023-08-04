@@ -4,7 +4,7 @@ observables
 start
 endobservables
 
-const int N=6;
+const int N=3;
 const int ENERGY=8;
 const int RESOLUTION = 2;
 const int fuelCAP = ENERGY;

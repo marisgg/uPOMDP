@@ -1,9 +1,11 @@
 import copy
+import multiprocessing
+import pickle
 
 import numpy as np
 from copy import deepcopy
 import time
-
+from scipy.special import softmax
 import stormpy
 from scipy.stats import entropy
 import tensorflow as tf
@@ -41,7 +43,7 @@ class Experiment:
         log = Log(self)
         logs = []
         if multi_thread:
-            Parallel(n_jobs = 4)(delayed(self._run)(log, cfg_idx, run_idx) for cfg_idx in range(len(self.cfgs)) for run_idx in range(self.num_runs))
+            logs = Parallel(n_jobs = min(self.num_runs, multiprocessing.cpu_count()-1))(delayed(self._run)(copy.deepcopy(log), cfg_idx, run_idx) for cfg_idx in range(len(self.cfgs)) for run_idx in range(self.num_runs))
         else:
             for cfg_idx in range(len(self.cfgs)):
                 for run_idx in range(self.num_runs):
@@ -49,6 +51,8 @@ class Experiment:
                     logs.append(copy.deepcopy(log))
         utils.inform(f'Finished experiment {self.name}.', indent = 0, itype = 'OKGREEN')
         log.output_benchmark_table(logs,log.base_output_dir)
+        with open(f"{log.base_output_dir}/logs.pickle", 'wb') as handle:
+            pickle.dump(logs, handle)
         try: log.output_learning_losses(logs,log.base_output_dir)
         except Exception as e: print(e)
         try: log.output_entropy(logs, self.num_runs, log.base_output_dir)
@@ -73,22 +77,24 @@ class Experiment:
         checker = Checker(instance, cfg)
         net = Net(instance, cfg)
 
-        utils.inform(f"Target policy: {cfg['policy']}. Policy loss: {cfg['a_loss']}.", indent = 0, itype = 'OKBLUE')
-
-        dynamic_uncertainty = True # TODO: Make config
-        deterministic_target_policy = True # TODO: Make config
+        dynamic_uncertainty = True # TODO: Make config?
+        deterministic_target_policy = cfg['train_deterministic']
 
         if dynamic_uncertainty:
             T = mdp.T.copy()
         
-        spec = MDPSpec.Rminmax # TODO: Make config
+        assert instance.objective == 'min'
+        
+        spec = MDPSpec(cfg['specification'])
+
+        utils.inform(f"Max k = {3**cfg['bottleneck_dim']}. Target policy: {cfg['policy']} ({'deterministic' if deterministic_target_policy else 'stochastic'}). Policy loss: {cfg['a_loss']}. Spec: {spec}.", indent = 0, itype = 'OKBLUE')
 
         mdp_goal_states = [i for i, x in enumerate(mdp.state_labels) if instance.label_to_reach in x]
 
         ipomdp = IPOMDP(pomdp, cfg['p_bounds'], mdp_goal_states)
         if 'u' in cfg['policy']:
             Q = ipomdp.mdp_action_values(spec)
-            utils.inform(f'Synthesized iMDP-policy (min: {Q.min():.2f}, max: {Q.max():.2f}) w/ value = {ipomdp.imdp_V[0]:.2f}')
+            utils.inform(f'Synthesized iMDP-policy (min: {Q.min():.2f}, max: {Q.max():.2f}) w/ value = {ipomdp.imdp_V[mdp.initial_state]}')
 
         for round_idx in range(cfg['rounds']):
 
@@ -122,16 +128,18 @@ class Experiment:
             utils.inform(f'{run_idx}-{round_idx}\t(QBN)\t\trloss \t%.4f' % r_loss[0] + '\t>>>> %3.4f' % r_loss[-1], indent = 0)
 
             fsc = net.extract_fsc(reshape=True, make_greedy = False)
+            utils.inform(f"{run_idx}-{round_idx}\t({fsc.nM_generated}-FSC)\t\tExtracted {fsc.nM_generated}-FSC from RNN", indent = 0)
             idtmc : IDTMC = ipomdp.create_iDTMC(fsc, add_noise=0)
+            utils.inform(f"{run_idx}-{round_idx}\t(iMC)\t\tInduced iMC with {pomdp.nS} x {fsc.nM_generated} = {idtmc.T_lower.shape[0]}^2 states ({np.count_nonzero(idtmc.T_lower)} non-zero entries)", indent = 0)
 
             V = idtmc.check_reward(spec, np.where(np.isin(idtmc.state_labels, np.unique(pomdp.labels_to_states[instance.label_to_reach])))[0])
-            utils.inform(f'{run_idx}-{round_idx}\t(%i-FSC)' % fsc.nM_generated + '\t\tiMC-V \t%.4f' % V[0], indent = 0)
-
-            iMC_worst_case_T = idtmc.find_transition_model(V, spec)
-            T = ipomdp.find_critical_pomdp_transitions(V, instance, iMC_worst_case_T, fsc, add_noise=0, tolerance=1e-6)
-            for n in range(fsc.nM_generated):
+            utils.inform(f'{run_idx}-{round_idx}\t(iMC)\t\tRVI \t%.4f' % V[0], indent = 0)
+            if dynamic_uncertainty:
+                iMC_worst_case_T = idtmc.find_transition_model(V, spec)
+                T = ipomdp.find_critical_pomdp_transitions(V, instance, iMC_worst_case_T, fsc, add_noise=0, tolerance=1e-6)
+            # for n in range(fsc.nM_generated):
                 # Assert a valid graph structure in the transition probabilities for all nodes.
-                assert np.array_equal(np.where(np.logical_or(np.isclose(T[n], 0, atol=1e-10), np.isclose(T[n], 1, atol=1e-10)))[0], np.where(np.logical_or(np.isclose(mdp.T, 0, atol=1e-10), np.isclose(mdp.T, 1, atol=1e-10)))[0]), T[n]
+                # assert np.array_equal(np.where(np.logical_or(np.isclose(T[n], 0, atol=1e-10), np.isclose(T[n], 1, atol=1e-10)))[0], np.where(np.logical_or(np.isclose(mdp.T, 0, atol=1e-10), np.isclose(mdp.T, 1, atol=1e-10)))[0]), T[n]
 
             pdtmc = instance.instantiate_pdtmc(fsc, zero = 0)
             fsc_memories, fsc_policies = fsc.simulate(observations)
@@ -200,6 +208,7 @@ class Experiment:
                 assert mdp_q_values.shape == mdp.action_values.shape
                 assert beliefs.shape[-1] == mdp_q_values.shape[0], "Shape mismatch."
                 q_values = np.matmul(beliefs, mdp_q_values)
+                assert q_values.shape == mdp.action_values[states].shape
             else:
                 raise ValueError("invalid policy")
 
@@ -212,9 +221,11 @@ class Experiment:
             if deterministic_target_policy:
                 a_labels = utils.one_hot_encode(nanarg(q_values, axis = -1), pomdp.nA, dtype ='float32')
             else:
-                q_values[mdp.A] = 0
-                exp = np.exp(q_values)
-                a_labels = exp / exp.sum()
+                q_values_nan_idxs = np.where(np.isnan(q_values))[0]
+                q_values = np.nan_to_num(q_values, nan=0)
+                soft_min_q = np.exp(-q_values) / np.exp(-q_values).sum()
+                soft_min_q[q_values_nan_idxs] = 0
+                a_labels = utils.normalize(soft_min_q,axis=-1)
 
             a_inputs = utils.one_hot_encode(observations, pomdp.nO, dtype = 'float32')
             # TRAIN RNN + Actor
@@ -225,8 +236,7 @@ class Experiment:
             label_cross_entropy = np.mean(label_cross_entropies)
 
             log.flush(cfg_idx, run_idx, nM = fsc.nM_generated, lb = check._lb_values[0], ub = check._ub_values[0],
-                      ps = ps, mdp_value = mdp.state_values[0], max_distance = check.max_distance,
-                      min_distance = check.min_distance,
+                      ps = ps, mdp_value = mdp.state_values[0], interval_mc_value = V[0],
                       evalues = evalues, worst_ps = worst_ps, added = added, slack = worst_value - check._ub_values[0],
                       empirical_result = empirical_result, front_values = np.array(instance.pareto_values),
                       mdp_policy = np.nanargmin(mdp.action_values, axis = -1), a_loss = np.array(a_loss), r_loss = np.array(r_loss),
@@ -234,4 +244,5 @@ class Experiment:
                       bounded_reach_prob = check.bounded_reach_prob)
 
             utils.inform(f'{run_idx}-{round_idx}\t(RNN)\t\taloss \t%.4f' % a_loss[0] + '\t>>>> %3.4f' % a_loss[-1], indent = 0)
-        log.collect(result_at_init=check.result_at_init,duration=time.time()-log.time,cum_rewards=empirical_result,evalues=evalues,k=fsc.nM_generated)
+        log.collect(result_at_init=check.result_at_init,duration=time.time()-log.time,cum_rewards=empirical_result,evalues=evalues,k=fsc.nM_generated,interval_mc_value = V[0])
+        return log
