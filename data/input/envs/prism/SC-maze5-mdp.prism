@@ -1,8 +1,4 @@
-pomdp
-observables
-
-	o
-endobservables
+mdp
 const double sl;
 const int K = 5;
 formula total_states = K * 3 + 7;
