@@ -48,7 +48,8 @@ class Instance:
 
         self.cfg = cfg
         self.name = cfg['name']
-        self.path = f'data/input/envs/prism/{self.name}.prism'
+        self.prism_path_without_extension = f'data/input/envs/prism/{self.name}'
+        self.path = f'{self.prism_path_without_extension}.prism'
         self.formula_str = cfg['formula_str']
         self.kind, self.objective, self.label_to_reach, self.label_to_avoid = parse_formula_str(cfg['formula_str'])
         self.properties = stormpy.parse_properties_without_context(cfg['formula_str'])

@@ -2,3 +2,4 @@
 .devcontainer
 Pipfile
 __pycache__/
+data/output

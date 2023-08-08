@@ -1,7 +1,7 @@
 import copy
 import multiprocessing
 import pickle
-
+import sys
 import numpy as np
 from copy import deepcopy
 import time
@@ -16,7 +16,7 @@ import inspect
 from fsc import FiniteMemoryPolicy
 from interval_models import IDTMC, IPOMDP, MDPSpec
 from models import POMDPWrapper
-
+from datetime import datetime
 from net import Net
 from instance import Instance
 from check import Checker
@@ -27,7 +27,7 @@ class Experiment:
     """ Represents a set of cfgs that serve an experiment. """
 
     def __init__(self, name, cfg, num_runs):
-        self.name = name
+        self.name = name + datetime.now().strftime("%Y%m%d%H%M%S%f")
         self.num_runs = num_runs
         self.cfgs = [cfg]
         self.cfg = cfg
@@ -47,20 +47,30 @@ class Experiment:
         else:
             for cfg_idx in range(len(self.cfgs)):
                 for run_idx in range(self.num_runs):
-                    self._run(log, cfg_idx, run_idx)
+                    log = self.run(log, cfg_idx, run_idx)
                     logs.append(copy.deepcopy(log))
         utils.inform(f'Finished experiment {self.name}.', indent = 0, itype = 'OKGREEN')
-        log.output_benchmark_table(logs,log.base_output_dir)
+        logs = [log for log in logs if log is not None]
+        if len(logs) == 0:
+            return
         with open(f"{log.base_output_dir}/logs.pickle", 'wb') as handle:
             pickle.dump(logs, handle)
+        log.output_benchmark_table(logs,log.base_output_dir)
         try: log.output_learning_losses(logs,log.base_output_dir)
         except Exception as e: print(e)
         try: log.output_entropy(logs, self.num_runs, log.base_output_dir)
         except Exception as e: print(e)
         try: log.output_memory_usage(logs, self.num_runs, log.base_output_dir)
         except Exception as e: print(e)
-
+    
     def _run(self, log, cfg_idx, run_idx):
+        try:
+            return self.run(log, cfg_idx, run_idx)
+        except Exception as e:
+            print(e, file=open(f"{log.base_output_dir}/{cfg_idx}/{run_idx}/exception.log", 'w'))
+            return None
+
+    def run(self, log, cfg_idx, run_idx):
 
         pycarl.clear_pools()
         tf.keras.backend.clear_session()
@@ -91,10 +101,12 @@ class Experiment:
 
         mdp_goal_states = [i for i, x in enumerate(mdp.state_labels) if instance.label_to_reach in x]
 
-        ipomdp = IPOMDP(pomdp, cfg['p_bounds'], mdp_goal_states)
+        ipomdp = IPOMDP(instance, pomdp, cfg['p_bounds'], mdp_goal_states)
         if 'u' in cfg['policy']:
             Q = ipomdp.mdp_action_values(spec)
             utils.inform(f'Synthesized iMDP-policy (min: {Q.min():.2f}, max: {Q.max():.2f}) w/ value = {ipomdp.imdp_V[mdp.initial_state]}')
+            print(Q[pomdp.initial_state])
+            # assert np.isclose(Q[mdp.initial_state].min(), ipomdp.imdp_V[mdp.initial_state]), (Q[mdp.initial_state].min(), ipomdp.imdp_V[mdp.initial_state].item())
 
         for round_idx in range(cfg['rounds']):
 
@@ -219,15 +231,18 @@ class Experiment:
             nanarg = np.nanargmin if instance.objective == 'min' else np.nanargmax
 
             if deterministic_target_policy:
-                a_labels = utils.one_hot_encode(nanarg(q_values, axis = -1), pomdp.nA, dtype ='float32')
+                a_labels = utils.one_hot_encode(nanarg(q_values, axis = -1), pomdp.nA, dtype ='float32')[1:]
             else:
+                def softx(q_values, min=True):
+                    x = -q_values if min else q_values
+                    return np.exp(x) / np.exp(x).sum()
                 q_values_nan_idxs = np.where(np.isnan(q_values))[0]
                 q_values = np.nan_to_num(q_values, nan=0)
-                soft_min_q = np.exp(-q_values) / np.exp(-q_values).sum()
+                soft_min_q = softx(q_values, instance.objective == 'min')
                 soft_min_q[q_values_nan_idxs] = 0
-                a_labels = utils.normalize(soft_min_q,axis=-1)
+                a_labels = utils.normalize(soft_min_q[1:],axis=-1)
 
-            a_inputs = utils.one_hot_encode(observations, pomdp.nO, dtype = 'float32')
+            a_inputs = utils.one_hot_encode(observations, pomdp.nO, dtype = 'float32')[1:]
             # TRAIN RNN + Actor
             a_loss = net.improve_a(a_inputs, a_labels)
 
@@ -239,7 +254,7 @@ class Experiment:
                       ps = ps, mdp_value = mdp.state_values[0], interval_mc_value = V[0],
                       evalues = evalues, worst_ps = worst_ps, added = added, slack = worst_value - check._ub_values[0],
                       empirical_result = empirical_result, front_values = np.array(instance.pareto_values),
-                      mdp_policy = np.nanargmin(mdp.action_values, axis = -1), a_loss = np.array(a_loss), r_loss = np.array(r_loss),
+                      mdp_policy_q = q_values, a_labels = a_labels, a_loss = np.array(a_loss), r_loss = np.array(r_loss),
                       fsc_entropy = fsc_entropy, rnn_entropy = rnn_entropy, cross_entropy = cross_entropy, label_cross_entropy = label_cross_entropy,
                       bounded_reach_prob = check.bounded_reach_prob)
 

@@ -19,6 +19,9 @@ import mip
 
 USE_PRISM = True
 
+if USE_PRISM:
+    import subprocess, os
+
 class MDPSpec(Enum):
     """
     (PO)MDP objectives, first min/max is the agent's objective, second min/max is how nature resolves the uncertainty
@@ -35,7 +38,8 @@ class IPOMDP:
     Interval wrapping of a pPOMDP in Stormpy by keeping a lower and upper bound transition matrix induced by the intervals given for the parameters.
     """
 
-    def __init__(self, pPOMDP : POMDPWrapper, intervals : dict[str, list], target_states : list[int]) -> None:
+    def __init__(self, instance : Instance, pPOMDP : POMDPWrapper, intervals : dict[str, list], target_states : list[int]) -> None:
+        self.instance = instance
         self.pPOMDP = pPOMDP # the underling pPOMDP wrapper
         self.intervals : dict[str, list] = intervals
         self.T_lower, self.T_upper, self.C, self.D, self.P = IPOMDP.parse_transitions(pPOMDP.model, pPOMDP.p_names, intervals)
@@ -72,7 +76,7 @@ class IPOMDP:
 
         if np.isclose(limit, 0) and np.isclose(np.sum(P_up), 0):
             # Sanity check, transition probability is 0.
-            return T_inner
+            return np.full(T_inner.shape, np.inf)
 
         while not np.isclose(limit - P_low[t] + P_up[t], 1) and limit - P_low[t] + P_up[t] < 1:
             limit = limit - P_low[t] + P_up[t]
@@ -102,8 +106,6 @@ class IPOMDP:
         LP = mip.Model(solver_name=mip.CBC)
 
         deterministic_fsc = fsc.is_made_greedy
-
-        # T = np.array([[[[LP.add_var(var_type='C', lb=0, ub=1) for _ in range(self.nS)] for _ in range(self.nA)] for _ in range(self.nS)] for _ in range(nM)])
 
         T = np.full((nM, self.nS, self.nA, self.nS), None)
 
@@ -175,12 +177,8 @@ class IPOMDP:
         LP.verbose = 0 # surpress output
         result = LP.optimize()
 
-        # import sys
-        # np.set_printoptions(threshold=sys.maxsize)
-
-
         if result not in {mip.OptimizationStatus.FEASIBLE, mip.OptimizationStatus.OPTIMAL}:
-            return None
+            raise Exception("LP is infeasible.")
 
         T = np.abs(np.vectorize(lambda x : x.x if isinstance(x, mip.Var) else x)(T))
         # T = np.round(T, decimals=6)
@@ -249,7 +247,7 @@ class IPOMDP:
                 if self.state_action_rewards:
                     rewards[prod_state] = sum([fsc.action_distributions[m, o, a] * self.R[s, a] for a in range(self.nA)])
                 else:
-                    rewards[prod_state] = self.R[s]                        
+                    rewards[prod_state] = self.R[s]
     
         assert None not in rewards
         assert (MC_T_lower.sum(axis=-1) <= 1.0 + 1e-6).all(), (MC_T_lower.sum(axis=-1)[MC_T_lower.sum(axis=-1) > 1])
@@ -303,50 +301,88 @@ class IPOMDP:
 
         return reward_zero_states, reward_inf_states
 
+    def one_step_VI(self, Q : np.ndarray, V : np.ndarray, spec : MDPSpec):
+        order = IDTMC.get_direction(spec, np.argsort(V))
+        states = set(list(range(self.nS))) - self.reward_inf_states.union(self.reward_zero_states)
+        for s in list(states):
+            for a in range(self.nA):
+                if self.pPOMDP.A[s, a]:
+                    Q[s, a] = np.inf
+                else:
+                    if np.allclose(self.T_lower[s,a], self.T_upper[s,a], atol=1e-6):
+                        Q[s, a] = self.R[s,a] if self.state_action_rewards else self.R[s]
+                    else:
+                        Q[s, a] = IPOMDP.compute_robust_value(self.R[s,a] if self.state_action_rewards else self.R[s], V, order, self.T_lower[s, a], self.T_upper[s, a])
+        return Q
+
     def mdp_action_values(self, spec : MDPSpec, epsilon=1e-6, max_iters=1e4) -> np.ndarray:
+        if USE_PRISM:
+            dt_str = datetime.now().strftime("%Y%m%d%H%M%S%f")
+            value_file = f"data/cache/Q-{dt_str}.txt"
+            property = f"{spec.name}=? [ F \"goal\" ]"
+            output = subprocess.run(["prism/prism-4.8/bin/prism", f"{self.instance.prism_path_without_extension}-mdp.prism", "-maxiters", str(int(1e6)), "-zerorewardcheck", "-nocompact", "-pf", property, "-exportvector", value_file, "-const", f'sll={min(self.intervals["sl"])}', "-const", f'slu={max(self.intervals["sl"])}'], check=True, capture_output=True)
+            try:
+                with open(value_file, 'r') as input:
+                    V = np.array([float(line.rstrip()) for line in input], dtype=float)
+            except Exception as error:
+                print("STDOUT:")
+                print(output.stdout.decode("utf-8"))
+                print("STDERR:")
+                print(output.stderr.decode("utf-8"))
+                raise error
+            os.remove(value_file)
+            assert V.size == self.T_lower.shape[0] == self.nS, (V.size, self.T_lower.shape[0])
+            Q = np.full((V.size, self.nA), np.nan)
+            Q = self.one_step_VI(Q, V, spec)
+            
+            self.imdp_Q = Q
+            self.imdp_V = V
+
+            return Q
+        else:
+            return self.__mdp_action_values(spec, epsilon, max_iters)
+
+    def __mdp_action_values(self, spec : MDPSpec, epsilon=1e-6, max_iters=1e4) -> np.ndarray:
         """
         Return the Q-values of the robust policy for the underlying interval MDP.
         """
         if spec not in {MDPSpec.Rminmax, MDPSpec.Rminmin}:
             raise NotImplementedError(spec)
-        
-        if self.imdp_Q is None or self.imdp_V is None:
 
-            V = np.zeros(self.nS)
-            Q = np.zeros((self.nS, self.nA))
+        V = np.zeros(self.nS)
+        Q = np.zeros((self.nS, self.nA))
 
-            min = spec in {MDPSpec.Rminmax, MDPSpec.Rminmin}
+        min = spec in {MDPSpec.Rminmax, MDPSpec.Rminmin}
 
-            error = 1.0
-            iters = 0
-            while error > epsilon and iters < max_iters:
-                order = IDTMC.get_direction(spec, np.argsort(V))
+        error = 1.0
+        iters = 0
+        while error > epsilon and iters < max_iters:
+            order = IDTMC.get_direction(spec, np.argsort(V))
 
-                v_next = np.zeros(self.nS)
-                q_next = np.zeros((self.nS, self.nA))
-                for s in range(self.nS):
-                    for a in range(self.nA):
-                        if s in self.reward_zero_states:
-                            v_next[s] = 0
-                            q_next[s,a] = 0
-                        elif s in self.reward_inf_states:
-                            v_next[s] = np.inf
-                            q_next[s, a] = np.inf
-                        elif self.pPOMDP.A[s, a]:
-                            q_next[s, a] = np.inf
-                        else:
-                            q_next[s, a] = IPOMDP.compute_robust_value(self.R[s,a] if self.state_action_rewards else self.R[s], V, order, self.T_lower[s, a], self.T_upper[s, a])
+            v_next = np.zeros(self.nS)
+            q_next = np.zeros((self.nS, self.nA))
+            for s in range(self.nS):
+                for a in range(self.nA):
+                    if s in self.reward_zero_states:
+                        v_next[s] = 0
+                        q_next[s,a] = 0
+                    elif s in self.reward_inf_states:
+                        v_next[s] = np.inf
+                        q_next[s, a] = np.inf
+                    elif self.pPOMDP.A[s, a]:
+                        q_next[s, a] = np.inf
+                    else:
+                        q_next[s, a] = IPOMDP.compute_robust_value(self.R[s,a] if self.state_action_rewards else self.R[s], V, order, self.T_lower[s, a], self.T_upper[s, a])
 
-                    v_next[s] = q_next[s].min() if min else q_next[s].max()
+                v_next[s] = q_next[s].min() if min else q_next[s].max()
 
-                error = np.abs(v_next - V).max()
-                V = v_next
-                Q = q_next
-                iters += 1
+            error = np.abs(v_next - V).max()
+            V = v_next
+            Q = q_next
+            iters += 1
 
-            self.imdp_Q = Q
-            self.imdp_V = V
-
+        self.imdp_Q = Q
+        self.imdp_V = V
         return self.imdp_Q
 
     @staticmethod
@@ -532,7 +568,6 @@ class IDTMC:
         if USE_PRISM:
             dt_str = datetime.now().strftime("%Y%m%d%H%M%S%f")
             value_file = f"data/cache/V-{dt_str}.txt"
-            import subprocess, os
             if spec in {MDPSpec.Rminmax, MDPSpec.Rmaxmax}:
                 property = "Rmax=? [ F \"goal\" ]"
             else:

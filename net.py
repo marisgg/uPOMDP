@@ -107,12 +107,19 @@ class Net(tf.keras.Model):
                 for possible_state in range(pomdp.nS):
                     assert belief[b].shape == T[node[b], :, action[b], possible_state].shape, T[node[b], :, action[b], possible_state]
                     next_belief[b, possible_state] *= np.sum(belief[b] * T[node[b], :, action[b], possible_state], axis=0)
-                next_belief[b] = ut.normalize(next_belief[b])
+                try:
+                    next_belief[b] = ut.normalize(next_belief[b])
+                except (AssertionError, FloatingPointError) as e:
+                    if np.count_nonzero(next_belief[b]) == 0:
+                        print(f"WARNING: Batch b = {b}; Defaulting to uniform belief as all probabilities are 0.")
+                        next_belief[b] = np.ones_like(next_belief[b]) / len(next_belief[b])
+                    else:
+                        raise e
             belief = np.array(next_belief)
 
             # Next node
             if FSC.is_randomized:
-                node = FSC._next_memories[node, observation].argmax()
+                node = FSC._next_memories[node, observation].argmax(axis=-1)
             else:
                 node = FSC._next_memories[node, observation]
 
@@ -179,9 +186,9 @@ class Net(tf.keras.Model):
 
             next_belief = np.zeros((batch_dim, pomdp.nS))
             for b in range(batch_dim):
-                possible_states = np.where(pomdp.O == observation[b])
+                possible_states = np.where(pomdp.O == observation[b])[0]
                 next_belief[b, possible_states] = 1
-                for possible_state in range(pomdp.nS):
+                for possible_state in possible_states:
                     next_belief[b, possible_state] *= np.sum(belief[b] * mdp.T[:, action[b], possible_state], axis=0)
                 next_belief[b] = ut.normalize(next_belief[b])
             belief = np.array(next_belief)
