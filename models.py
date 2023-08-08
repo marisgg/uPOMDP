@@ -33,7 +33,7 @@ class Wrapper:
             self.p_names = [p.name for p in self.probability_parameters]
 
         self.O = O
-        self.T, self.C, self.A, self.S, self.P, self.D = utils.parse_transitions(model, self.p_names, check=True)
+        # self.T, self.C, self.A, self.S, self.P, self.D = utils.parse_transitions(model, self.p_names, check=True)
         self.transition_matrix = model.transition_matrix
         self.labeling = model.labeling
 
@@ -114,7 +114,7 @@ class Wrapper:
 
         self.initial_state = model.initial_states
         self.initial_observation = self.O[self.initial_state]
-        self.initial_state_is_real_state = np.sum(np.sum(self.T, axis = 0), axis = 0)[0] > 0 # check whether state 0 is reachable after init.
+        # self.initial_state_is_real_state = np.sum(np.sum(self.T, axis = 0), axis = 0)[0] > 0 # check whether state 0 is reachable after init.
 
     def _instantiated_transition_matrix(self, p_values):
         """
@@ -216,10 +216,10 @@ class POMDPWrapper(Wrapper):
         super().__init__(model, properties, O)
 
         # Check that only one parameter per transition can exist.
-        parameterized = np.count_nonzero(self.P != None, axis = -1)
-        more_than_one = np.where(parameterized > 1)
-        if np.any(parameterized > 1):
-            raise ValueError(f'Invalid uPOMDP passed more than 1 parameter found at {more_than_one}.')
+        # parameterized = np.count_nonzero(self.P != None, axis = -1)
+        # more_than_one = np.where(parameterized > 1)
+        # if np.any(parameterized > 1):
+        #     raise ValueError(f'Invalid uPOMDP passed more than 1 parameter found at {more_than_one}.')
 
 
 class MDPWrapper(Wrapper):

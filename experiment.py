@@ -92,9 +92,9 @@ class Experiment:
 
         if dynamic_uncertainty:
             T = mdp.T.copy()
-        
+
         assert instance.objective == 'min'
-        
+
         spec = MDPSpec(cfg['specification'])
 
         utils.inform(f"Max k = {3**cfg['bottleneck_dim']}. Target policy: {cfg['policy']} ({'deterministic' if deterministic_target_policy else 'stochastic'}). Policy loss: {cfg['a_loss']}. Spec: {spec}.", indent = 0, itype = 'OKBLUE')
@@ -142,18 +142,24 @@ class Experiment:
             fsc = net.extract_fsc(reshape=True, make_greedy = False)
             utils.inform(f"{run_idx}-{round_idx}\t({fsc.nM_generated}-FSC)\t\tExtracted {fsc.nM_generated}-FSC from RNN", indent = 0)
             idtmc : IDTMC = ipomdp.create_iDTMC(fsc, add_noise=0)
-            utils.inform(f"{run_idx}-{round_idx}\t(iMC)\t\tInduced iMC with {pomdp.nS} x {fsc.nM_generated} = {idtmc.T_lower.shape[0]}^2 states ({np.count_nonzero(idtmc.T_lower)} non-zero entries)", indent = 0)
+            utils.inform(f"{run_idx}-{round_idx}\t(iMC)\t\tInduced iMC with {pomdp.nS} x {fsc.nM_generated} = {idtmc.nS} states", indent = 0)
 
             V = idtmc.check_reward(spec, np.where(np.isin(idtmc.state_labels, np.unique(pomdp.labels_to_states[instance.label_to_reach])))[0])
             utils.inform(f'{run_idx}-{round_idx}\t(iMC)\t\tRVI \t%.4f' % V[0], indent = 0)
             if dynamic_uncertainty:
                 iMC_worst_case_T = idtmc.find_transition_model(V, spec)
+                utils.inform(f'{run_idx}-{round_idx}\t(iMC)\t\tFound Markov chain transition model. Computing LP..', indent = 0)
                 T = ipomdp.find_critical_pomdp_transitions(V, instance, iMC_worst_case_T, fsc, add_noise=0, tolerance=1e-6)
+                utils.inform(f'{run_idx}-{round_idx}\t(LP)\t\tFound worst-case uPOMDP transition model.', indent = 0)
             # for n in range(fsc.nM_generated):
                 # Assert a valid graph structure in the transition probabilities for all nodes.
                 # assert np.array_equal(np.where(np.logical_or(np.isclose(T[n], 0, atol=1e-10), np.isclose(T[n], 1, atol=1e-10)))[0], np.where(np.logical_or(np.isclose(mdp.T, 0, atol=1e-10), np.isclose(mdp.T, 1, atol=1e-10)))[0]), T[n]
+            if not dynamic_uncertainty:
+                pdtmc = instance.instantiate_pdtmc(fsc, zero = 0)
+                check = checker.check_pdtmc(pdtmc)
+                added = instance.add_fsc(check, fsc)
+                utils.inform(f'{run_idx}-{round_idx}\t(%i-FSC)' % fsc.nM_generated + '\t\trinit \t%.4f' % check._lb_values[0] + '\t\t%.4f' % check._ub_values[0], indent = 0)
 
-            pdtmc = instance.instantiate_pdtmc(fsc, zero = 0)
             fsc_memories, fsc_policies = fsc.simulate(observations)
             log_fsc_policies = np.log(fsc_policies) / np.expand_dims(np.log(num_choices), axis = -1)
             log_fsc_policies[np.logical_not(np.isfinite(log_fsc_policies))] = 0
@@ -165,20 +171,6 @@ class Experiment:
             relevant_entropies = all_cross_entropies[np.logical_and(relevant_timesteps, num_actions > 1)]
             cross_entropy = np.mean(relevant_entropies) # buggy, can be > 1 for some unknown reason.
 
-            check = checker.check_pdtmc(pdtmc)
-            added = instance.add_fsc(check, fsc)
-            utils.inform(f'{run_idx}-{round_idx}\t(%i-FSC)' % fsc.nM_generated + '\t\trinit \t%.4f' % check._lb_values[0] + '\t\t%.4f' % check._ub_values[0], indent = 0)
-
-            try:
-                error = set(check._lb_values).union(check._ub_values).intersection({np.nan, np.inf})
-                assert len(error) == 0, f"pDTMC checking resulting in NaN or infinite value: {error}"
-            except AssertionError as ae:
-                print(fsc)
-                print(pdtmc.model)
-                print("is parametric:", pdtmc.is_parametric)
-                print(ae)
-                exit()
-
             if cfg['ctrx_gen'] == 'rnd' and pomdp.is_parametric:
                 mdp, worst_value = instance.build_mdp(), 0
             elif cfg['ctrx_gen'] == 'crt' and added and pomdp.is_parametric:
@@ -187,7 +179,7 @@ class Experiment:
                 mdp, worst_ps, worst_value = instance.worst_mdp(check, fsc)
             elif cfg['ctrx_gen'] == 'rnd_full' and pomdp.is_parametric:
                 mdp, worst_value = instance.build_mdp(), 0
-            elif cfg['ctrx_gen'] == 'crt_full' and pomdp.is_parametric:
+            elif cfg['ctrx_gen'] == 'crt_full' and pomdp.is_parametric and not dynamic_uncertainty:
                 # Maris: PSO for worst instantiation is done here.
                 mdp, worst_ps, worst_value = instance.worst_mdp(check, fsc)
             else:
@@ -195,7 +187,8 @@ class Experiment:
                 worst_ps = {}
 
             length = instance.simulation_length()
-            evalues = check.evaluate(cfg['p_evals'])
+            if not dynamic_uncertainty:
+                evalues = check.evaluate(cfg['p_evals'])
 
             nan_fixer = 10**10 if instance.objective == 'min' else -10**10
 
@@ -224,7 +217,6 @@ class Experiment:
             else:
                 raise ValueError("invalid policy")
 
-
             if 'u' in cfg['policy'] and round == 0:
                 utils.inform(f'{run_idx}-{round_idx}''\t\iMDP value: \t%.4f' % mdp_q_values[mdp.initial_state].min() if instance.objective == 'min' else q_values[mdp.initial_state].max(), indent = 0)
             
@@ -240,17 +232,24 @@ class Experiment:
                 q_values = np.nan_to_num(q_values, nan=0)
                 soft_min_q = softx(q_values, instance.objective == 'min')
                 soft_min_q[q_values_nan_idxs] = 0
+                print(soft_min_q)
                 a_labels = utils.normalize(soft_min_q[1:],axis=-1)
 
             a_inputs = utils.one_hot_encode(observations, pomdp.nO, dtype = 'float32')[1:]
             # TRAIN RNN + Actor
             a_loss = net.improve_a(a_inputs, a_labels)
 
-            label_cross_entropies = np.sum(a_labels * - log_policies, axis = -1)
-            relevant_entropies = label_cross_entropies[np.logical_and(relevant_timesteps, num_actions > 1)]
+            label_cross_entropies = np.sum(a_labels * - log_policies[1:], axis = -1)
+            relevant_entropies = label_cross_entropies[np.logical_and(relevant_timesteps, num_actions > 1)[1:]]
             label_cross_entropy = np.mean(label_cross_entropies)
 
-            log.flush(cfg_idx, run_idx, nM = fsc.nM_generated, lb = check._lb_values[0], ub = check._ub_values[0],
+            if dynamic_uncertainty:
+                log.flush(cfg_idx, run_idx, nM = fsc.nM_generated, mdp_value = mdp.state_values[0], interval_mc_value = V[0],
+                      empirical_result = empirical_result, 
+                      mdp_policy_q = q_values, a_labels = a_labels, a_loss = np.array(a_loss), r_loss = np.array(r_loss),
+                      fsc_entropy = fsc_entropy, rnn_entropy = rnn_entropy, cross_entropy = cross_entropy, label_cross_entropy = label_cross_entropy)
+            else:
+                log.flush(cfg_idx, run_idx, nM = fsc.nM_generated, lb = check._lb_values[0], ub = check._ub_values[0],
                       ps = ps, mdp_value = mdp.state_values[0], interval_mc_value = V[0],
                       evalues = evalues, worst_ps = worst_ps, added = added, slack = worst_value - check._ub_values[0],
                       empirical_result = empirical_result, front_values = np.array(instance.pareto_values),

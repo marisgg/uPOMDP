@@ -1,3 +1,4 @@
+import random
 import tensorflow as tf
 import larq as lq
 import numpy as np
@@ -65,8 +66,8 @@ class Net(tf.keras.Model):
             hxs = np.full((batch_dim, length, self.memory_dim), -2, dtype = 'float32')
             hqs = np.full((batch_dim, length, self.bottleneck_dim), -2, dtype = 'int64')
 
-        state = np.array([np.squeeze(pomdp.initial_state) for s in range(batch_dim)], dtype = 'int64')
-        observation = np.array([np.squeeze(pomdp.initial_observation) for s in range(batch_dim)], dtype = 'int64')
+        state = np.array([np.squeeze(pomdp.initial_state) for b in range(batch_dim)], dtype = 'int64')
+        observation = np.array([np.squeeze(pomdp.initial_observation) for b in range(batch_dim)], dtype = 'int64')
 
         belief = np.zeros((batch_dim, pomdp.nS))
         belief[:, pomdp.initial_state] = 1
@@ -97,31 +98,30 @@ class Net(tf.keras.Model):
             policies[:, l] = a.numpy()
             actions[:, l] = action
             rewards[:, l, :] = pomdp.rewards[state, :]
-            state = ut.choice_from_md(T[node, state, action], batch_dim)
+            for b in range(batch_dim):
+                possible_states = list(T[node[b]][(state[b], action[b])].keys())
+                probs = T[node[b]][(state[b], action[b])].values()
+                state[b] = random.choices(possible_states, weights=probs, k=1)[0]
             observation = pomdp.O[state]
 
             next_belief = np.zeros((batch_dim, pomdp.nS))
             for b in range(batch_dim):
                 possible_states = np.where(pomdp.O == observation[b])
                 next_belief[b, possible_states] = 1
-                for possible_state in range(pomdp.nS):
-                    assert belief[b].shape == T[node[b], :, action[b], possible_state].shape, T[node[b], :, action[b], possible_state]
-                    next_belief[b, possible_state] *= np.sum(belief[b] * T[node[b], :, action[b], possible_state], axis=0)
-                try:
-                    next_belief[b] = ut.normalize(next_belief[b])
-                except (AssertionError, FloatingPointError) as e:
-                    if np.count_nonzero(next_belief[b]) == 0:
-                        print(f"WARNING: Batch b = {b}; Defaulting to uniform belief as all probabilities are 0.")
-                        next_belief[b] = np.ones_like(next_belief[b]) / len(next_belief[b])
-                    else:
-                        raise e
+                for (s, a), next_state_list in T[node[b]].items():
+                    if a != action[b]:
+                        continue
+                    for possible_state in possible_states[0]:
+                        if possible_state in next_state_list:
+                            next_belief[b, possible_state] += belief[b, possible_state] * next_state_list[possible_state]
+                next_belief[b] = ut.normalize(next_belief[b])
             belief = np.array(next_belief)
 
             # Next node
             if FSC.is_randomized:
-                node = FSC._next_memories[node, observation].argmax(axis=-1)
+                node = FSC._next_memories[node, observation].argmax(axis=-1) % FSC.nM_generated
             else:
-                node = FSC._next_memories[node, observation]
+                node = FSC._next_memories[node, observation] % FSC.nM_generated
 
         if quantize:
             if inspect:
