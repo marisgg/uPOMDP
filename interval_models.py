@@ -358,10 +358,11 @@ class IPOMDP:
                     print(T, D, C, sep='\n')
                     raise ValueError("Non-parametric transition that has a negative probability.")
             for next_s in D[s].keys():
-                derivative = D[s][next_s]
-                constant = C[s][next_s]
-                transitions_string += f" ({constant} + {derivative}*{list(self.intervals.keys())[0]}) : (s'={next_s}) +"
-                has_outgoing = True
+                if self.P[(s, next_s)]:
+                    derivative = D[s][next_s]
+                    constant = C[s][next_s]
+                    transitions_string += f" ({constant} + {derivative}*{list(self.intervals.keys())[0]}) : (s'={next_s}) +"
+                    has_outgoing = True
 
             if has_outgoing:
                 transitions_strings += transitions_string[:-2] + ';\n'
