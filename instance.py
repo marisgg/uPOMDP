@@ -193,18 +193,6 @@ class Instance:
         nM = fsc.nM_generated
         fsc.mask(self.pomdp.policy_mask)
         nS, nA = self.pomdp.nS, self.pomdp.nA
-        # t = np.zeros((nM, nS, nA))
-        # t = fsc.action_distributions[:, self.pomdp.O, :]
-        # t = np.repeat(np.expand_dims(t, axis = -1), axis = -1, repeats = nS) # nM x nS x nA x nS'
-        # t = np.repeat(np.expand_dims(t, axis = -1), axis = -1, repeats = nM) # nM x nS x nA x nS' x nM'
-        # _t = fsc.randomized_next_memories(add = zero)[:, self.pomdp.O, :] # nM x nS x nM'
-        # _t = np.repeat(np.expand_dims(_t, axis = -1), axis = -1, repeats = nS) # nM x nS x nM' x nS'
-        # _t = np.repeat(np.expand_dims(_t, axis = 2), axis = 2, repeats = self.pomdp.nA) # nM x nS x nA x nM' x nS'
-        # _t = np.moveaxis(_t, source = 3, destination = 4) # nM x nS x nA x nS' x nM'
-        # _t = np.moveaxis(_t, source = 0, destination = 1) # nS x nM x nA x nS' x nM'
-        # t = np.moveaxis(t, source = 0, destination = 1) # nS x nM x nA x nS' x nM'
-        # __t = t * _t # nS x nM x nA x nS' x nM'
-        # __t = np.sum(__t, axis = 2) # nS x nM x nS' x nM'
 
         ps = list(self.p_bounds.keys())
         assert len(ps) == 1
@@ -218,17 +206,6 @@ class Instance:
         rewards_strs = ['' for r_idx in range(self.pomdp.num_reward_models)]
         labels_to_states = {}
         next_memories = fsc.randomized_next_memories(add = zero)
-
-        # for s in range(self.pomdp.nS):
-        #     o = self.pomdp.O[s]
-        #     for m in range(nM):
-        #         prod_state = s * nM + m
-        #         for action in self.pomdp.model.states[s].actions:
-        #             a = action.id
-        #             for transition in action.transitions:
-        #                 s_next = transition.column
-        #                 value = transition.value()
-        #                 pass
 
         for s in range(self.pomdp.nS):
             o = self.pomdp.O[s]
@@ -337,7 +314,7 @@ class Instance:
         contents = in_out.pdtmc_string(p_string, self.pomdp.nS, nM, transitions_strings, label_strings, rewards_strs[0])
         fn = in_out.cache_pdtmc(contents)
         prism_program = stormpy.parse_prism_program(fn, simplify = False)
-        os.remove(fn)
+        # os.remove(fn)
         if self.pomdp.is_parametric:
             model = stormpy.build_sparse_parametric_model(prism_program)
             p_region_dict = {

@@ -4,8 +4,9 @@ import numpy as np
 import scipy.stats
 
 from copy import deepcopy
+from models import POMDPWrapper
 
-import utils
+import utils 
 
 
 class FiniteMemoryPolicy:
@@ -105,6 +106,39 @@ class FiniteMemoryPolicy:
             raise ValueError(f'Distributions do not sum up to (close to) 0, 1, or are NaN. Sums are: \n{sums}')
         return True
 
+    def simulate_fsc(self, ipomdp, pomdp : POMDPWrapper, T : np.ndarray, batch_dim, length, greedy = False):
+        """ Simulates an interaction of this HxQBN-GRU-RNN with a POMDP model application. """
+
+        node = self.reset(batch_dim) % self.nM_generated
+        assert batch_dim == self.batch_dim
+
+        states = np.zeros((batch_dim, length), dtype = 'int64')
+        rewards = np.zeros((batch_dim, length, pomdp.num_reward_models), dtype = 'float64')
+
+        state = np.array([np.squeeze(pomdp.initial_state) for b in range(batch_dim)], dtype = 'int64')
+        observation = np.array([np.squeeze(pomdp.initial_observation) for b in range(batch_dim)], dtype = 'int64')
+
+        belief = np.zeros((batch_dim, pomdp.nS))
+        belief[:, pomdp.initial_state] = 1
+
+        assert self.is_masked
+
+        for l in range(length):
+
+            states[:, l] = state
+            action = self.action(observation, greedy=greedy)
+
+            rewards[:, l, :] = ipomdp.R[state, action][..., np.newaxis] if ipomdp.state_action_rewards else ipomdp.R[state][..., np.newaxis]
+            for b in range(batch_dim):
+                possible_states = list(T[node[b]][(state[b], action[b])].keys())
+                probs = T[node[b]][(state[b], action[b])].values()
+                state[b] = random.choices(possible_states, weights=probs, k=1)[0]
+            observation = pomdp.O[state]
+
+            node = self.step(observation) % self.nM_generated
+        
+        return rewards
+
     def reset(self, batch_dim):
         """
         Resets the internal memory state, which is zero by default.
@@ -139,7 +173,7 @@ class FiniteMemoryPolicy:
         action_distributions = self.action_distributions[memories, observations]
         return action_distributions
 
-    def action(self, observations, greedy = False):
+    def action(self, observations, greedy = False, mask = None):
         """
         Returns an array of actions for the input observations and current memory state.
 
@@ -154,9 +188,9 @@ class FiniteMemoryPolicy:
         action_distributions = self.action_distribution(observations)
 
         if greedy:
-            actions = utils.argmax_from_md(action_distributions, self.batch_dim)
+            actions = utils.argmax_from_md(action_distributions, self.batch_dim, mask = mask)
         else:
-            actions = utils.choice_from_md(action_distributions, self.batch_dim)
+            actions = utils.choice_from_md(action_distributions, self.batch_dim, mask = mask)
         return actions
 
     def step(self, observations):

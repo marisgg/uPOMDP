@@ -1,5 +1,6 @@
 mdp
-const double sl;
+const double sll;
+const double slu;
 const int K = 5;
 formula total_states = K * 3 + 7;
 formula bottom_left = s = total_states - 2;
@@ -72,12 +73,12 @@ module maze
 	[east] above_left -> (s'=s);
 	[west] above_left -> 1:(s'=s);
 	[north] above_left -> (s'=s-3) & (o'=5);
-	[south] above_left -> (1-sl):(s'=s+3) & (o'=6) + sl:(s'=s+5)&(o'=7);
+	[south] above_left -> [(1-slu),(1-sll)]:(s'=s+3) & (o'=6) + [sll, slu]:(s'=s+5)&(o'=7);
 
 	[east] above_right -> (s'=s);
 	[west] above_right -> 1:(s'=s);
 	[north] above_right -> (s'=s-3) & (o'=5);
-	[south] above_right -> (1-sl):(s'=s+2) & (o'=6) + sl:(s'=s+3)&(o'=7);
+	[south] above_right -> [(1-slu),(1-sll)]:(s'=s+2) & (o'=6) + [sll, slu]:(s'=s+3)&(o'=7);
 
 	[east] above_center -> (s'=s);
 	[west] above_center -> 1:(s'=s);

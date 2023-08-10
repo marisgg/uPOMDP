@@ -61,10 +61,10 @@ module drone
     dx : [dxMIN..dxMAX] init dxMIN;
     dy : [dyMIN..dyMAX] init dyMIN;
 
-    [west] westenabled -> (1-sl): (dx'=max(dx-1,dxMIN)) + sl: (dx'=max(dx,dxMIN));
-    [east] eastenabled -> (1-sl): (dx'=min(dx+1,dxMAX)) + sl: (dx'=min(dx,dxMAX));
-    [south]  southenabled -> (1-sl): (dy'=min(dy+1,dyMAX)) + sl: (dy'=min(dy,dyMAX));
-    [north]  northenabled -> (1-sl): (dy'=max(dy-1,dyMIN)) + sl: (dy'=max(dy,dyMIN));
+    [west] true -> (1-sl): (dx'=max(dx-1,dxMIN)) + sl: (dx'=max(dx,dxMIN));
+    [east] true -> (1-sl): (dx'=min(dx+1,dxMAX)) + sl: (dx'=min(dx,dxMAX));
+    [south]  true -> (1-sl): (dy'=min(dy+1,dyMAX)) + sl: (dy'=min(dy,dyMAX));
+    [north]  true -> (1-sl): (dy'=max(dy-1,dyMIN)) + sl: (dy'=max(dy,dyMIN));
 endmodule
 
 
@@ -89,8 +89,6 @@ rewards
     [west] true : 1;
     [east] true : 1;
 endrewards
-
-
 
 label "goal" = done;
 label "traps" = crash;

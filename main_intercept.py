@@ -12,5 +12,5 @@ for filename in load_file:
       cfg['a_loss'] = 'kld'
       cfg['train_deterministic'] = False
       cfg['specification'] = MDPSpec.Rminmax.value
-      exp = Experiment("both-" + cfg["name"], cfg, 30)
-      exp.execute(True)
+      exp = Experiment("both-" + cfg["name"], cfg, 1)
+      exp.execute(False)

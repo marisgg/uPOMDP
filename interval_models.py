@@ -4,8 +4,9 @@ from datetime import datetime
 import math
 import multiprocessing
 import warnings
-import in_out
 from fsc import FiniteMemoryPolicy
+import in_out
+
 from instance import Instance
 
 from models import POMDPWrapper
@@ -18,9 +19,10 @@ from enum import Enum
 
 import mip
 
-USE_PRISM = True
+USE_PRISM_IMDP = False
+USE_PRISM_IDTMC = True
 
-if USE_PRISM:
+if USE_PRISM_IMDP or USE_PRISM_IDTMC:
     import subprocess, os
 
 class MDPSpec(Enum):
@@ -43,10 +45,11 @@ class IPOMDP:
         self.instance = instance
         self.pPOMDP = pPOMDP # the underling pPOMDP wrapper
         self.intervals : dict[str, list] = intervals
-        self.T, self.P = IPOMDP.parse_transitions(pPOMDP.model, pPOMDP.p_names, intervals)
+        self.T, self.P, self.C, self.D = IPOMDP.parse_transitions(pPOMDP.model, pPOMDP.p_names, intervals)
         self.state_labeling, self.reward_models = pPOMDP.model_reward_and_labeling(True)
         assert len(self.reward_models) == 1, "Only supporting rewards/costs as of yet."
         self.R = np.array(self.reward_models[0])
+        assert np.count_nonzero(self.R) > 0
         self.state_action_rewards = len(self.R.shape) > 1
 
         self.nS = pPOMDP.nS
@@ -219,6 +222,8 @@ class IPOMDP:
         next_states = deque([0])
         reachable_states = {0}
 
+        assert np.count_nonzero(rewards) > 0, rewards
+
         while next_states:
             next_s = next_states.popleft()
             new_reachable_states = MC_T[next_s].keys()
@@ -231,6 +236,160 @@ class IPOMDP:
         unreachable_states = list(set(iter(range(self.nS * nM))) - reachable_states)
 
         return IDTMC(self.nS * nM, MC_T, MC_P, rewards, state_labels, memory_labels, labels_to_states, unreachable_states)
+
+    def instantiate_pdtmc(self, fsc : FiniteMemoryPolicy, zero = 1e-8):
+        """
+        Instantiates the (p)DTMC, which is parameterized by values of the policy.
+
+        @param: fsc                 :   a FiniteMemoryPolicy instance.
+        @param: zero                :   a pseudo-zero number for graph-preserving the PDTMC.
+        @return:                    :   a PDTMCWrapper instance.
+
+        """
+
+        import stormpy
+
+        # To do: make faster. Replace for-loops with np.arrays
+
+        nM = fsc.nM_generated
+        if not fsc.is_masked:
+            fsc.mask(self.pPOMDP.policy_mask)
+        nS, nA = self.nS, self.nA
+
+        ps = list(self.intervals.keys())
+        assert len(ps) == 1
+        T = {} # Holds the transition matrix for the Markov chain (nS x nM)
+        D = {} # Holds the probabilities for the derived part of the parameter
+        C = {} # Holds the probabilities for the constant part of the parameter
+        observations_label_set = set.union(*[set(s) for s in self.pPOMDP.observation_labels])
+        observation_labels = {observation_label : [] for observation_label in observations_label_set}
+        state_labels = []
+        memory_labels = []
+        rewards_strs = ['' for r_idx in range(1)]
+        labels_to_states = {}
+        next_memories = fsc.randomized_next_memories(add = zero)
+
+        for (s,a) in self.T.keys():
+            o = self.pPOMDP.O[s]
+            observation_label = self.pPOMDP.observation_labels[o]
+            for m in range(nM):
+                prod_state = s * nM + m
+                if prod_state not in T:
+                    T[prod_state] = {}
+                    C[prod_state] = {}
+                    D[prod_state] = {}
+                for label in self.pPOMDP.states_to_labels[s]:
+                    if label in labels_to_states:
+                        labels_to_states[label].append(prod_state)
+                    else:
+                        labels_to_states[label] = [prod_state]
+                state_labels.append(s)
+                memory_labels.append(m)
+                mean_r = 0
+                for o_i in observation_label:
+                    observation_labels[o_i].append(prod_state)
+                for next_s, interval in self.T[(s,a)].items():
+                    for next_m in range(nM):
+                        prod_next_state = next_s * nM + next_m
+                        action_prob = fsc.action_distributions[m, o, a]
+                        # memory_prob = fsc._next_memories[m, o] == next_m
+                        memory_prob = next_memories[m, o, next_m]
+                        fsc_prob = action_prob * memory_prob
+                        if self.P[(s, a)][next_s]:
+                            derivative = self.D[(s, a)][next_s]
+                            constant = self.C[(s, a)][next_s]
+                            if prod_next_state not in D[prod_state]:
+                                D[prod_state][prod_next_state] = derivative * fsc_prob
+                            else:
+                                D[prod_state][prod_next_state] += derivative * fsc_prob
+                            if prod_next_state not in C[prod_state]:
+                                C[prod_state][prod_next_state] = constant * fsc_prob
+                            else:
+                                C[prod_state][prod_next_state] += constant * fsc_prob
+                        else:
+                            assert self.T[(s, a)][next_s][0] == self.T[(s, a)][next_s][1], (self.T[(s, a)][next_s][0], self.T[(s, a)][next_s][1])
+                            if prod_next_state not in T[prod_state]:
+                                T[prod_state][prod_next_state] = self.T[(s, a)][next_s][0] * fsc_prob
+                            else:
+                                T[prod_state][prod_next_state] += self.T[(s, a)][next_s][0] * fsc_prob
+                        has_outgoing = True
+                if self.state_action_rewards:
+                    rewards_strs[0] += f'\ts={prod_state} : {sum([fsc.action_distributions[m, o, a] * self.R[s, a] for a in range(self.nA)])};\n'
+                else:
+                    rewards_strs[0] += f'\ts={prod_state} : {self.R[s]};\n'
+
+        # # Reachability analysis, delete labels of unreachable states.
+        # hops = np.full((self.pomdp.nS * nM), np.inf) # k-hops from init to each state.
+        # k = 0
+        # hops[0] = 0
+        # while np.any(hops < np.inf) and k < len(hops) + 1:
+        #     states, next_states = np.where(np.logical_or(T[hops < np.inf] > 0, np.any(D[hops < np.inf] != 0, axis = -1)))
+        #     hops[next_states] = np.minimum(k + 1, hops[next_states])
+        #     k += 1
+
+        # state_labels = list(np.array(state_labels)[hops < np.inf])
+        # memory_labels = list(np.array(memory_labels)[hops < np.inf])
+
+        p_string = ''
+        for idx, p in enumerate(ps):
+            p_string += f'const double {p};\n'
+
+        label_strings = ''
+        for label in observation_labels:
+            if label == 'init' or label == '':
+                continue
+            states = observation_labels[label]
+            label_string = f'label "{label}"='
+            for state in states:
+                label_string += f's={state}|'
+            label_strings += label_string[:-1] + ';\n'
+
+        transitions_strings = ''
+        for s, next_dict in T.items():
+            transitions_string = f'\t[] s={s} ->'
+            has_outgoing = False
+            for next_s, trans_prob in next_dict.items():
+                if trans_prob > 0:
+                    transitions_string += f" {trans_prob} : (s'={next_s}) +"
+                    has_outgoing = True
+                elif trans_prob == 0:
+                    pass
+                else:
+                    print(T, D, C, sep='\n')
+                    raise ValueError("Non-parametric transition that has a negative probability.")
+            for next_s in D[s].keys():
+                derivative = D[s][next_s]
+                constant = C[s][next_s]
+                transitions_string += f" ({constant} + {derivative}*{list(self.intervals.keys())[0]}) : (s'={next_s}) +"
+                has_outgoing = True
+
+            if has_outgoing:
+                transitions_strings += transitions_string[:-2] + ';\n'
+
+        rewards_strs = ['true : 0;'] if len(rewards_strs) == 0 else rewards_strs
+        contents = in_out.pdtmc_string(p_string, self.nS, nM, transitions_strings, label_strings, rewards_strs[0])
+        fn = in_out.cache_pdtmc(contents)
+        prism_program = stormpy.parse_prism_program(fn, simplify = False)
+        # os.remove(fn)
+        if self.pPOMDP.is_parametric:
+            model = stormpy.build_sparse_parametric_model(prism_program)
+            p_region_dict = {
+                x : (stormpy.RationalRF(self.intervals[x.name][0]), 
+                    stormpy.RationalRF(self.intervals[x.name][1]))
+                for x in model.collect_probability_parameters()
+            }
+        else:
+            assert False, "This is a pDTMC"
+            model = stormpy.build_model(prism_program)
+            p_region_dict = {}
+        
+        from models import PDTMCModelWrapper
+
+        pdtmc = PDTMCModelWrapper(model, self.pPOMDP, nM, p_region_dict, state_labels, memory_labels)
+        # if pdtmc.nS != np.count_nonzero(hops < np.inf):
+            # raise ValueError('Inaccuracies after translating PDTMC to Stormpy model.')
+        return pdtmc
+
 
     def preprocess(self, target : list[int]):
         reward_zero_states = set(target)
@@ -253,7 +412,7 @@ class IPOMDP:
         not_reaching_target_states = deque(reward_inf_states)
         while not_reaching_target_states:
             state = not_reaching_target_states.popleft()
-            for next_state in range(nS):
+            for next_state in range(self.nS):
                 for act in range(self.nA):
                     if next_state not in reward_inf_states and self.T_lower[state, act, next_state] > 0:
                         reward_inf_states.add(next_state)
@@ -261,22 +420,23 @@ class IPOMDP:
 
         return reward_zero_states, reward_inf_states
 
-    def one_step_VI(self, Q : np.ndarray, V : np.ndarray, spec : MDPSpec):
+    def one_step_VI(self, Q : np.ndarray, V : np.ndarray, spec : MDPSpec, set_unreachable_to_nan = False):
         order = IDTMC.get_direction(spec, np.argsort(V))
+        assert np.count_nonzero(self.R) > 0
+        if set_unreachable_to_nan:
+            Q = np.full_like(Q, np.nan)
         for (s, a) in self.T.keys():
             next_states_dict = self.T[(s,a)]
-            if not self.P[(s,a)][list(next_states_dict.keys())[0]]:
-                assert all([not self.P[(s,a)][key] for key in next_states_dict.keys()])
-                Q[s, a] = self.R[s,a] if self.state_action_rewards else self.R[s]
+            if not any([self.P[(s,a)][next_s] for next_s in next_states_dict.keys()]):
+                next_s_transition = {next_s : interval[0] for next_s, interval in next_states_dict.items()}
+                Q[s, a] = (self.R[s,a] if self.state_action_rewards else self.R[s]) + sum([V[next_state_idx] * prob for next_state_idx, prob in next_s_transition.items()])
             else:
-                assert all([self.P[(s,a)][key] for key in next_states_dict.keys()])
                 next_s_transition = IDTMC.solve_sparse_problem(order, next_states_dict)
-                Q[s, a] = self.R[s,a] if self.state_action_rewards else self.R[s] + sum([V[idx] * prob for idx, prob in next_s_transition.items()])
-
+                Q[s, a] = (self.R[s,a] if self.state_action_rewards else self.R[s]) + sum([V[next_state_idx] * prob for next_state_idx, prob in next_s_transition.items()])
         return Q
 
     def mdp_action_values(self, spec : MDPSpec, epsilon=1e-6, max_iters=1e4) -> np.ndarray:
-        if USE_PRISM:
+        if USE_PRISM_IMDP:
             dt_str = datetime.now().strftime("%Y%m%d%H%M%S%f")
             value_file = f"data/cache/Q-{dt_str}.txt"
             property = f"{spec.name}=? [ F \"goal\" ]"
@@ -299,7 +459,7 @@ class IPOMDP:
             os.remove(value_file)
             assert V.size == self.nS, (V.size, self.nS)
             Q = np.full((V.size, self.nA), np.nan)
-            Q = self.one_step_VI(Q, V, spec)
+            Q = self.one_step_VI(Q, V, spec, set_unreachable_to_nan=True)
             
             self.imdp_Q = Q
             self.imdp_V = V
@@ -307,7 +467,7 @@ class IPOMDP:
             return Q
         else:
             return self.__mdp_action_values(spec, epsilon, max_iters)
-
+    
     def __mdp_action_values(self, spec : MDPSpec, epsilon=1e-6, max_iters=1e4) -> np.ndarray:
         """
         Return the Q-values of the robust policy for the underlying interval MDP.
@@ -325,34 +485,29 @@ class IPOMDP:
         while error > epsilon and iters < max_iters:
             order = IDTMC.get_direction(spec, np.argsort(V))
 
-            v_next = np.zeros(self.nS)
-            q_next = np.zeros((self.nS, self.nA))
-            for s in range(self.nS):
-                for a in range(self.nA):
-                    if s in self.reward_zero_states:
-                        v_next[s] = 0
-                        q_next[s,a] = 0
-                    elif s in self.reward_inf_states:
-                        v_next[s] = np.inf
-                        q_next[s, a] = np.inf
-                    elif self.pPOMDP.A[s, a]:
-                        q_next[s, a] = np.inf
-                    else:
-                        q_next[s, a] = IPOMDP.compute_robust_value(self.R[s,a] if self.state_action_rewards else self.R[s], V, order, self.T_lower[s, a], self.T_upper[s, a])
+            v_next = np.full(self.nS, np.inf)
+            q_next = np.full((self.nS, self.nA), np.inf)
 
-                v_next[s] = q_next[s].min() if min else q_next[s].max()
+            q_next = self.one_step_VI(Q, V, spec)
+
+            v_next = q_next.min(axis=-1) if min else q_next.max(axis=-1)
 
             error = np.abs(v_next - V).max()
             V = v_next
             Q = q_next
             iters += 1
+        
+        self.imdp_Q = Q = self.one_step_VI(Q, V, spec, set_unreachable_to_nan=True)
+        self.imdp_V = np.full(self.nS, np.nan)
+
+
 
         self.imdp_Q = Q
         self.imdp_V = V
         return self.imdp_Q
 
     @staticmethod
-    def parse_parametric_transition(value, p_names, intervals, lower_is_lower=True):
+    def parse_parametric_transition(value, p_names, intervals, lower_is_lower=True, return_constants_and_derivatives=False):
         variables = list(value.gather_variables())
         assert set(v.name for v in variables) == set(p_names), (set([v.name for v in variables]), set(p_names))
         constant = value.constant_part()
@@ -371,7 +526,11 @@ class IPOMDP:
             bounds = np.sort(bounds,axis=-1)
         lower, upper = bounds[:, 0].prod(), bounds[:, 1].prod()
         assert not lower_is_lower or upper >= lower
-        return lower, upper
+        if return_constants_and_derivatives:
+            assert len(constants) == len(derivatives) == 1
+            return lower, upper, constants[0], derivatives[0]
+        else:
+            return lower, upper
 
 
     @staticmethod
@@ -379,12 +538,16 @@ class IPOMDP:
         T = {}
         P = {}
 
+        D = {}
+        C = {}
+
         for state in model.states:
             for action in state.actions:
                 if (state.id, action.id) not in T:
                     T[(state.id, action.id)] = {}
-                if (state.id, action.id) not in P:
                     P[(state.id, action.id)] = {}
+                    D[(state.id, action.id)] = {}
+                    C[(state.id, action.id)] = {}
                 for transition in action.transitions:
                     next_state = transition.column
                     value = transition.value()
@@ -396,11 +559,11 @@ class IPOMDP:
                         P[(state.id, action.id)][next_state] = False
                         if debug: print("Value:", value, "parsed:", parsed)
                     else:
-                        lower, upper = IPOMDP.parse_parametric_transition(value, p_names, intervals)
+                        lower, upper, C[(state.id, action.id)][next_state], D[(state.id, action.id)][next_state] = IPOMDP.parse_parametric_transition(value, p_names, intervals, return_constants_and_derivatives=True)
                         P[(state.id, action.id)][next_state] = True
                         if debug: print(f"Found interval [{lower}, {upper}] for transition {state}, {action.id}, {next_state} resulting from {value} and {intervals}")
                     T[(state.id, action.id)][next_state] = (lower, upper)
-        return T, P
+        return T, P, C, D
         
 
 class IDTMC:
@@ -416,10 +579,11 @@ class IDTMC:
         self.state_labels, self.memory_labels = state_labels, memory_labels
         self.nS = nS
         self.R = np.array(rewards, dtype=float)                # 1D: (nS * nM)
+        assert self.R.size == self.nS, (self.R.size, self.nS)
         assert self.R.ndim == 1
         assert (self.R >= 0).all() and not np.isinf(self.R).any()
 
-        if USE_PRISM:
+        if USE_PRISM_IDTMC:
             self.materialized_idtmc_filename = self.to_prism_file()
     
     def to_prism_file(self):
@@ -463,8 +627,7 @@ class IDTMC:
 
     def preprocess(self, target):
         reward_zero_states = set(target.tolist())
-        num_mc_states = self.T_lower.shape[0]
-        reachability_vector = np.zeros(num_mc_states, dtype=int)
+        reachability_vector = np.zeros(self.nS, dtype=int)
         reachability_vector[target] = 1
 
         queue = deque(target)
@@ -472,13 +635,8 @@ class IDTMC:
 
         while queue:
             current_state = queue.popleft()
-            # next_states = np.where(np.logical_and(self.T_lower[:, current_state] > 0, reachability_vector == 0))[0]
-            # reachability_vector[next_states] = 1
-            # queue.extend(next_states)
-
-            # for next_state in np.where(reachability_vector == 0)[0]:
-            for next_state in range(num_mc_states):
-                if reachability_vector[next_state] == 0 and self.T_lower[next_state, current_state] > 0:
+            for next_state in range(self.nS):
+                if reachability_vector[next_state] == 0 and next_state in self.sparse_T[current_state]:
                     reachability_vector[next_state] = 1
                     queue.append(next_state)
 
@@ -486,8 +644,8 @@ class IDTMC:
         not_reaching_target_states = deque(reward_inf_states)
         while not_reaching_target_states:
             state = not_reaching_target_states.popleft()
-            for next_state in range(num_mc_states):
-                if next_state not in reward_inf_states and self.T_lower[state, next_state] > 0:
+            for next_state in range(self.nS):
+                if next_state not in reward_inf_states and next_state in self.sparse_T[state]:
                     reward_inf_states.add(next_state)
                     not_reaching_target_states.append(next_state)
 
@@ -520,7 +678,13 @@ class IDTMC:
             limit = limit - lower_bounds[t_idx] + upper_bounds[t_idx]
             next_s_resolved_map[t] = upper_bounds[t_idx]
             i += 1
-            t = order[i]
+            # if i == len(order):
+                # break
+            try:
+                t = order[i]
+            except IndexError as ie:
+                print(i, t_idx, limit - lower_bounds[t_idx] + upper_bounds[t_idx], state_ids, order)
+                raise ie
             t_idx = state_ids.index(t)
         
         next_s_resolved_map[t] = 1 - (np.round(limit, decimals=6) - lower_bounds[t_idx])
@@ -540,10 +704,15 @@ class IDTMC:
         order = IDTMC.get_direction(spec, np.argsort(V))
 
         for s, next_s_list in self.sparse_T.items():
-            if self.P[s][list(next_s_list.keys())[0]]:
-                assert all([self.P[s][next_s_p] for next_s_p in next_s_list.keys()])
-                next_map = self.solve_sparse_problem(order, next_s_list)
-                MC_T[s] = next_map
+            if any([self.P[s][next_s] for next_s in list(next_s_list.keys())]): # if there is an uncertain/interval transition in this sparse map
+                # We separate interval and constant transitions here
+                # todo_next_s_list = {next_s : next_s_list[next_s] for next_s in next_s_list if self.P[s][next_s]}
+                # static_next_s_list = {next_s : next_s_list[next_s][0] for next_s in next_s_list if not self.P[s][next_s]}
+                # Find inner problem for sparse map of interval transitions
+                # next_map = self.solve_sparse_problem(order, todo_next_s_list)
+                # Update found probabilities with the constant values
+                # next_map.update(static_next_s_list)
+                MC_T[s] = self.solve_sparse_problem(order, next_s_list)
             else:
                 continue
 
@@ -551,7 +720,7 @@ class IDTMC:
 
     def check_reward(self, spec : MDPSpec, target : set, epsilon=1e-6, max_iters=1e3):
         reachable_idxs = np.array([x for x in range(self.nS) if x not in self.unreachable_states])
-        if USE_PRISM:
+        if USE_PRISM_IDTMC:
             dt_str = datetime.now().strftime("%Y%m%d%H%M%S%f")
             value_file = f"data/cache/V-{dt_str}.txt"
             if spec in {MDPSpec.Rminmax, MDPSpec.Rmaxmax}:
@@ -577,28 +746,21 @@ class IDTMC:
             assert V.size == self.nS, (V.size, self.nS)
             return V
         else:
-            self.__check_reward(spec, target, epsilon=epsilon, max_iters=max_iters)
+            return self.__check_reward(spec, target, epsilon=epsilon, max_iters=max_iters)
 
     def __check_reward(self, spec : MDPSpec, target : set, epsilon=1e-6, max_iters=1e3):
         if spec is not MDPSpec.Rminmax:
             raise NotImplementedError()
 
         if spec in {MDPSpec.Rminmax, MDPSpec.Rminmin}:
-            assert self.R[target].sum() == 0
+            assert self.R[target].sum() == 0, (self.R[target], target)
 
-        nb_states = self.T_lower.shape[0]
-        V = np.zeros(nb_states)
-        reward_zero_states, reward_inf_states = self.preprocess(target)
+        V = np.zeros(self.nS)
+        # reward_zero_states, reward_inf_states = self.preprocess(target)
 
-        # self.unreachable_states = set(self.unreachable_states.tolist())
+        assert np.count_nonzero(self.R) > 0
 
-        # if len(reward_zero_states - unreachable_states) != 0:
-        #     print(reward_inf_states, unreachable_states)
-        #     print("!!!! There are no reachable target states in the Markov chain. !!!!")
-
-        hashmaps = {s : {} for s in range(nb_states) if s not in reward_inf_states.union(reward_zero_states)}
-
-        assert (self.T_lower <= self.T_upper).all()
+        reward_zero_states = set(target)
 
         error = 1.0
         iters = 0
@@ -606,29 +768,25 @@ class IDTMC:
         while error > epsilon and iters < max_iters:
 
             order = IDTMC.get_direction(spec, np.argsort(V))
-            hashed_order = tuple(order.tolist())
-            v_next = np.zeros(nb_states)
+            v_next = np.zeros(self.nS)
 
-            for s in range(nb_states):
+            for s, next_s_list in self.sparse_T.items():
+
                 if s in reward_zero_states:
                     v_next[s] = 0
-                elif s in reward_inf_states:
+                # elif s in reward_inf_states:
+                    # v_next[s] = np.inf
+                elif s in self.unreachable_states:
                     v_next[s] = np.inf
-                # elif s in unreachable_states:
-                    # v_next[s] = infinity
                 else:
-                    if hashed_order in hashmaps[s]:
-                        T_inner = hashmaps[s][hashed_order]
+                    if any([self.P[s][next_s] for next_s in list(next_s_list.keys())]): # if there is an uncertain/interval transition in this sparse map
+                        T_inner = self.solve_sparse_problem(order, next_s_list)
                     else:
-                        if np.allclose(self.T_lower, self.T_upper, atol=1e-6):
-                            T_inner = self.T_lower
-                        else:
-                            T_inner = IPOMDP.solve_inner_problem(order, self.T_lower[s], self.T_upper[s])
-                        hashmaps[s][hashed_order] = T_inner
-                    assert not np.isnan(T_inner).any(), T_inner
-                    assert not np.isnan(V).any(), V
-                    v_next[s] = self.R[s] + T_inner @ V
-                    # v_next[s] = IPOMDP.compute_robust_value(self.R[s], V, order, self.T_lower[s], self.T_upper[s])
+                        T_inner = {next_s : interval[0] for next_s, interval in next_s_list.items()}
+
+                    v_next[s] = self.R[s] + sum([V[next_state_idx] * prob for next_state_idx, prob in T_inner.items()])
+            
+            assert np.isfinite(v_next).sum() > 0
 
             error = np.abs(v_next - V).max()
             V = v_next

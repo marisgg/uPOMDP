@@ -9,6 +9,7 @@ from keras import backend as K
 from keras.utils.generic_utils import get_custom_objects
 import scipy.stats
 from copy import deepcopy
+from interval_models import IPOMDP
 from models import MDPWrapper, POMDPWrapper
 import utils as ut
 from fsc import FiniteMemoryPolicy
@@ -46,7 +47,7 @@ class Net(tf.keras.Model):
         p = self.actor(h)
         return p
 
-    def simulate_with_dynamic_uncertainty(self, pomdp : POMDPWrapper, T : np.ndarray, FSC : FiniteMemoryPolicy, batch_dim = None, greedy = False, length = None, quantize = False, inspect = False):
+    def simulate_with_dynamic_uncertainty(self, ipomdp : IPOMDP, pomdp : POMDPWrapper, T : np.ndarray, FSC : FiniteMemoryPolicy, batch_dim = None, greedy = False, length = None, quantize = False, inspect = False):
         """ Simulates an interaction of this HxQBN-GRU-RNN with a POMDP model application. """
 
         batch_dim = batch_dim or self.cfg['batch_dim']
@@ -97,7 +98,7 @@ class Net(tf.keras.Model):
 
             policies[:, l] = a.numpy()
             actions[:, l] = action
-            rewards[:, l, :] = pomdp.rewards[state, :]
+            rewards[:, l, :] = ipomdp.R[state, action][..., np.newaxis] if ipomdp.state_action_rewards else ipomdp.R[state][..., np.newaxis]
             for b in range(batch_dim):
                 possible_states = list(T[node[b]][(state[b], action[b])].keys())
                 probs = T[node[b]][(state[b], action[b])].values()
@@ -130,6 +131,90 @@ class Net(tf.keras.Model):
                 return beliefs, states, hs, hxs, observations, policies, actions, rewards
         else:
             return beliefs, states, hs, observations, policies, actions, rewards
+
+
+    def simulate_with_ipomdp(self, ipomdp : IPOMDP, batch_dim = None, greedy = False, length = None, quantize = False, inspect = False):
+        """ Simulates an interaction of this HxQBN-GRU-RNN with a POMDP model application. """
+
+        batch_dim = batch_dim or self.cfg['batch_dim']
+        length = length or self.cfg['length']
+
+        beliefs = np.zeros((batch_dim, length, ipomdp.nS))
+        states = np.zeros((batch_dim, length), dtype = 'int64')
+        observations = np.zeros((batch_dim, length), dtype = 'int64')
+        policies = np.zeros((batch_dim, length, ipomdp.nA), dtype = 'float64')
+        actions = np.zeros((batch_dim, length), dtype = 'int64')
+        rewards = np.zeros((batch_dim, length, 1), dtype = 'float64')
+
+        hs = np.zeros((batch_dim, length, self.memory_dim), dtype = 'float32')
+        if quantize:
+            hxs = np.full((batch_dim, length, self.memory_dim), -2, dtype = 'float32')
+            hqs = np.full((batch_dim, length, self.bottleneck_dim), -2, dtype = 'int64')
+
+        state = np.array([np.squeeze(ipomdp.pPOMDP.initial_state) for s in range(batch_dim)], dtype = 'int64')
+        observation = np.array([np.squeeze(ipomdp.pPOMDP.initial_observation) for s in range(batch_dim)], dtype = 'int64')
+
+        belief = np.zeros((batch_dim, ipomdp.nS))
+        belief[:, ipomdp.pPOMDP.initial_state] = 1
+
+        reset = self.qbn_gru_rnn.reset(batch_dim, quantize)
+        if quantize:
+            h, hq, hx = reset
+        else:
+            h = reset
+
+        T = {}
+        
+        for (s, a), next_state_list in ipomdp.T.items():
+            T[(s,a)] = {next_s : (random.uniform(interval[0], interval[1]) if ipomdp.P[(s,a)][next_s] else interval[0]) for next_s, interval in next_state_list.items()}
+
+        for l in range(length):
+
+            beliefs[:, l] = belief
+            states[:, l] = state
+            observations[:, l] = observation
+
+            hs[:, l] = h
+            if quantize:
+                hxs[:, l] = hx
+                hqs[:, l] = hq
+
+            x = np.reshape(ut.one_hot_encode(observation, ipomdp.pPOMDP.nO, dtype = 'float32'), (batch_dim, ipomdp.pPOMDP.nO))
+            if quantize:
+                a, action, h, hq, hx = self._action(x, inspect = True, greedy = greedy,  quantize = quantize, states = hx, mask = ipomdp.pPOMDP.policy_mask[observation])
+            else:
+                a, action, h = self._action(x, inspect = inspect, greedy = greedy, states = h, mask = ipomdp.pPOMDP.policy_mask[observation])
+
+            policies[:, l] = a.numpy()
+            actions[:, l] = action
+            rewards[:, l, :] = ipomdp.R[state, action][..., np.newaxis] if ipomdp.state_action_rewards else ipomdp.R[state][..., np.newaxis]
+            for b in range(batch_dim):
+                possible_states = list(ipomdp.T[(state[b], action[b])].keys())
+                probs = T[(state[b], action[b])].values()
+                state[b] = random.choices(possible_states, weights=probs, k=1)[0]
+            observation = ipomdp.pPOMDP.O[state]
+
+            next_belief = np.zeros((batch_dim, ipomdp.nS))
+            for b in range(batch_dim):
+                possible_states = np.where(ipomdp.pPOMDP.O == observation[b])
+                next_belief[b, possible_states] = 1
+                for (s, a), next_state_list in T.items():
+                    if a != action[b]:
+                        continue
+                    for possible_state in possible_states[0]:
+                        if possible_state in next_state_list:
+                            next_belief[b, possible_state] += belief[b, possible_state] * next_state_list[possible_state]
+                next_belief[b] = ut.normalize(next_belief[b])
+            belief = np.array(next_belief)
+
+        if quantize:
+            if inspect:
+                return beliefs, states, hs, hqs, hxs, observations, policies, actions, rewards
+            else:
+                return beliefs, states, hs, hxs, observations, policies, actions, rewards
+        else:
+            return beliefs, states, hs, observations, policies, actions, rewards
+
 
     def simulate(self, pomdp : POMDPWrapper, mdp : MDPWrapper, batch_dim = None, greedy = False, length = None, quantize = False, inspect = False):
         """ Simulates an interaction of this HxQBN-GRU-RNN with a POMDP model application. """

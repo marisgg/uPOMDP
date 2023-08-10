@@ -104,8 +104,8 @@ def parse_transitions(model, p_names, check = True):
 
 def normalize(a, axis = -1, raise_error = True, method = 'sum'):
     if raise_error:
-        assert np.isfinite(a).all()
-        assert np.count_nonzero(a) > 0
+        assert not np.isnan(a).any(), a
+        assert np.count_nonzero(a) > 0, a
         if method == 'sum':
             with np.errstate(invalid = 'raise'):
                 a /= np.sum(a, axis = axis, keepdims = True)
