@@ -1,3 +1,6 @@
+from datetime import datetime
+import os
+import subprocess
 import warnings
 import stormpy
 import stormpy.pars
@@ -190,7 +193,7 @@ class Wrapper:
 
         """
         if self.is_parametric and p_values is None:
-            raise ValueError('Model is parametric, so you must specify a value to instantiate with.')
+            return self.model.transition_matrix, self.model.labeling, self.model.reward_models
         if not self.is_parametric:
             return self.model.transition_matrix, self.model.labeling, self.model.reward_models
         else:
@@ -261,18 +264,43 @@ class PDTMCModelWrapper(Wrapper):
 
     """
 
-    def __init__(self, model, pomdp, nM, p_region_dict = {}, state_labels = None, memory_labels = None):
+    def __init__(self, model, pomdp, nM, p_region_dict = {}, state_labels = None, memory_labels = None, fn = None):
         O = np.arange(model.nr_states, dtype = 'int64')
         super().__init__(model, pomdp.properties, O)
 
         self.underlying_nM = nM
         self.underlying_nS = pomdp.nS
 
+        self.materialized_pdtmc_filename = fn
+
         self.state_labels = state_labels
         self.memory_labels = memory_labels
 
         self.p_region_dict = p_region_dict
         self.parameter_region = stormpy.pars.ParameterRegion(p_region_dict)
+    
+    def check_ps_with_prism(self, p_vals):
+        dt_str = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        value_file = f"data/cache/V-{dt_str}.txt"
+        property = 'R=? [ F "goal" ]'
+        values = []
+        for dictio in p_vals:
+            for p, val in dictio.items():
+                output = subprocess.run(["prism/prism/bin/prism", self.materialized_pdtmc_filename, "-const", f"{p}={val}", "-maxiters", str(int(1e6)), "-zerorewardcheck", "-pf", property, "-exportvector", value_file], check=True, capture_output=True)
+                try:
+                    with open(value_file, 'r') as input:
+                        prism_values = np.array([float(line.rstrip()) for line in input], dtype=float)
+                except Exception as error:
+                    print("STDOUT:")
+                    print(output.stdout.decode("utf-8"))
+                    print("STDERR:")
+                    print(output.stderr.decode("utf-8"))
+                    raise error
+                values.append(prism_values[0])
+                os.remove(value_file)
+        os.remove(self.materialized_pdtmc_filename)
+        
+        return values
 
 # class ProductPOMDPWrapper(POMDPWrapper):
 #     """

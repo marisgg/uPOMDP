@@ -19,11 +19,12 @@ from enum import Enum
 
 import mip
 
-USE_PRISM_IMDP = False
+USE_PRISM_IMDP = True
 USE_PRISM_IDTMC = True
 
 if USE_PRISM_IMDP or USE_PRISM_IDTMC:
     import subprocess, os
+    PRISM_PATH = "prism/prism/bin/prism"
 
 class MDPSpec(Enum):
     """
@@ -55,8 +56,19 @@ class IPOMDP:
         self.nS = pPOMDP.nS
         self.nA = pPOMDP.nA
         # self.reward_zero_states, self.reward_inf_states = self.preprocess(target_states)
+        self.reward_zero_states = set(target_states)
         self.imdp_Q = None
         self.imdp_V = None
+
+    @staticmethod
+    def get_direction(spec : MDPSpec, order : np.ndarray):
+        """
+        Nature's direction given the optimization target of the uMDP.
+        """
+        if spec in {MDPSpec.Rminmax, MDPSpec.Rmaxmin}:
+            return order[::-1] # reverse for pessimistic
+        else:
+            return order
 
     @staticmethod
     def compute_robust_value(R, V, order, lower, upper):
@@ -249,8 +261,6 @@ class IPOMDP:
 
         import stormpy
 
-        # To do: make faster. Replace for-loops with np.arrays
-
         nM = fsc.nM_generated
         if not fsc.is_masked:
             fsc.mask(self.pPOMDP.policy_mask)
@@ -311,29 +321,17 @@ class IPOMDP:
                             else:
                                 C[prod_state][prod_next_state] += constant * fsc_prob 
                         else:
-                            assert self.T[(s, a)][next_s][0] == self.T[(s, a)][next_s][1], (self.T[(s, a)][next_s][0], self.T[(s, a)][next_s][1])
+                            assert interval[0] == interval[1], (interval[0], interval[1])
                             if prod_next_state not in T[prod_state]:
-                                T[prod_state][prod_next_state] = self.T[(s, a)][next_s][0] * fsc_prob
+                                T[prod_state][prod_next_state] = interval[0] * fsc_prob
                             else:
-                                T[prod_state][prod_next_state] += self.T[(s, a)][next_s][0] * fsc_prob
+                                T[prod_state][prod_next_state] += interval[0] * fsc_prob
                         has_outgoing = True
                 if self.state_action_rewards:
                     # rewards_strs[0] += f'\ts={prod_state} : {sum([fsc.action_distributions[m, o, a] * self.R[s, a] for a in range(self.nA)])};\n'
                     R[prod_state] = sum([fsc.action_distributions[m, o, a] * self.R[s, a] for a in range(self.nA)])
                 else:
                     R[prod_state] = self.R[s]
-
-        # # Reachability analysis, delete labels of unreachable states.
-        # hops = np.full((self.pomdp.nS * nM), np.inf) # k-hops from init to each state.
-        # k = 0
-        # hops[0] = 0
-        # while np.any(hops < np.inf) and k < len(hops) + 1:
-        #     states, next_states = np.where(np.logical_or(T[hops < np.inf] > 0, np.any(D[hops < np.inf] != 0, axis = -1)))
-        #     hops[next_states] = np.minimum(k + 1, hops[next_states])
-        #     k += 1
-
-        # state_labels = list(np.array(state_labels)[hops < np.inf])
-        # memory_labels = list(np.array(memory_labels)[hops < np.inf])
 
         p_string = ''
         for idx, p in enumerate(ps):
@@ -429,19 +427,26 @@ class IPOMDP:
 
         return reward_zero_states, reward_inf_states
 
-    def one_step_VI(self, Q : np.ndarray, V : np.ndarray, spec : MDPSpec, set_unreachable_to_nan = False):
-        order = IDTMC.get_direction(spec, np.argsort(V))
+    def one_step_VI(self, V : np.ndarray, spec : MDPSpec, set_unreachable_to_nan = False):
+        assert np.isfinite(V).all()
+        order = self.get_direction(spec, np.argsort(V))
         assert np.count_nonzero(self.R) > 0
         if set_unreachable_to_nan:
-            Q = np.full_like(Q, np.nan)
-        for (s, a) in self.T.keys():
-            next_states_dict = self.T[(s,a)]
-            if not any([self.P[(s,a)][next_s] for next_s in next_states_dict.keys()]):
-                next_s_transition = {next_s : interval[0] for next_s, interval in next_states_dict.items()}
-                Q[s, a] = (self.R[s,a] if self.state_action_rewards else self.R[s]) + sum([V[next_state_idx] * prob for next_state_idx, prob in next_s_transition.items()])
+            Q = np.full((self.nS, self.nA), np.nan)
+        else:
+            Q = np.zeros((self.nS, self.nA))
+        for (s, a), next_states_dict in self.T.items():
+            if s in self.reward_zero_states:
+                Q[s, a] = 0
             else:
-                next_s_transition = IDTMC.solve_sparse_problem(order, next_states_dict)
-                Q[s, a] = (self.R[s,a] if self.state_action_rewards else self.R[s]) + sum([V[next_state_idx] * prob for next_state_idx, prob in next_s_transition.items()])
+                if not any([self.P[(s,a)][next_s] for next_s in next_states_dict.keys()]):
+                    next_s_transition = {next_s : interval[0] for next_s, interval in next_states_dict.items()}
+                    assert np.isclose(sum(next_s_transition.values()), 1), (next_s_transition.values(), sum(next_s_transition.values()))
+                    Q[s, a] = (self.R[s,a] if self.state_action_rewards else self.R[s]) + sum([V[next_state_idx] * prob for next_state_idx, prob in next_s_transition.items()])
+                else:
+                    next_s_transition = IDTMC.solve_sparse_problem(order, next_states_dict)
+                    assert np.isclose(sum(next_s_transition.values()), 1), (next_s_transition.values(), sum(next_s_transition.values()))
+                    Q[s, a] = (self.R[s,a] if self.state_action_rewards else self.R[s]) + sum([V[next_state_idx] * prob for next_state_idx, prob in next_s_transition.items()])
         return Q
 
     def mdp_action_values(self, spec : MDPSpec, epsilon=1e-6, max_iters=1e4) -> np.ndarray:
@@ -449,7 +454,7 @@ class IPOMDP:
             dt_str = datetime.now().strftime("%Y%m%d%H%M%S%f")
             value_file = f"data/cache/Q-{dt_str}.txt"
             property = f"{spec.name}=? [ F \"goal\" ]"
-            args = ["prism/prism-4.8/bin/prism", f"{self.instance.prism_path_without_extension}-mdp.prism", "-maxiters", str(int(1e6)), "-zerorewardcheck", "-nocompact", "-pf", property, "-exportvector", value_file, "-const", f'sll={min(self.intervals["sl"])}', "-const", f'slu={max(self.intervals["sl"])}']
+            args = [PRISM_PATH, f"{self.instance.prism_path_without_extension}-mdp.prism", "-maxiters", str(int(1e6)), "-zerorewardcheck", "-nocompact", "-pf", property, "-exportvector", value_file, "-const", f'sll={min(self.intervals["sl"])}', "-const", f'slu={max(self.intervals["sl"])}']
             try:
                 output = subprocess.run(args, check=True, capture_output=True)
             except Exception as e:
@@ -467,9 +472,10 @@ class IPOMDP:
                 raise error
             os.remove(value_file)
             assert V.size == self.nS, (V.size, self.nS)
-            Q = np.full((V.size, self.nA), np.nan)
-            Q = self.one_step_VI(Q, V, spec, set_unreachable_to_nan=True)
-            
+            Q = self.one_step_VI(V, spec, set_unreachable_to_nan=True)
+
+            # assert np.allclose(Q.min(axis=-1), V), np.concatenate((np.expand_dims(np.nanmin(Q, axis=-1), axis=-1), np.expand_dims(V, axis=-1)), axis=-1)
+
             self.imdp_Q = Q
             self.imdp_V = V
 
@@ -497,7 +503,7 @@ class IPOMDP:
             v_next = np.full(self.nS, np.inf)
             q_next = np.full((self.nS, self.nA), np.inf)
 
-            q_next = self.one_step_VI(Q, V, spec)
+            q_next = self.one_step_VI(V, spec, set_unreachable_to_nan=False)
 
             v_next = q_next.min(axis=-1) if min else q_next.max(axis=-1)
 
@@ -506,7 +512,7 @@ class IPOMDP:
             Q = q_next
             iters += 1
         
-        self.imdp_Q = Q = self.one_step_VI(Q, V, spec, set_unreachable_to_nan=True)
+        self.imdp_Q = Q = self.one_step_VI(V, spec, set_unreachable_to_nan=True)
         self.imdp_V = np.full(self.nS, np.nan)
 
 
@@ -736,7 +742,7 @@ class IDTMC:
                 property = "Rmax=? [ F \"goal\" ]"
             else:
                 property = "Rmin=? [ F \"goal\" ]"
-            output = subprocess.run(["prism/prism-4.8/bin/prism", self.materialized_idtmc_filename, "-maxiters", str(int(1e6)), "-zerorewardcheck", "-pf", property, "-exportvector", value_file], check=True, capture_output=True)
+            output = subprocess.run([PRISM_PATH, self.materialized_idtmc_filename, "-maxiters", str(int(1e6)), "-zerorewardcheck", "-pf", property, "-exportvector", value_file], check=True, capture_output=True)
             V = np.zeros(self.nS, dtype=float)
             try:
                 with open(value_file, 'r') as input:
@@ -748,7 +754,7 @@ class IDTMC:
                 print(output.stderr.decode("utf-8"))
                 raise error
             assert prism_values.size + len(self.unreachable_states) == self.nS, (prism_values.size, len(self.unreachable_states), self.nS)
-            # os.remove(self.materialized_idtmc_filename)
+            os.remove(self.materialized_idtmc_filename)
             os.remove(value_file)
             V[self.unreachable_states] = np.inf
             V[reachable_idxs] = prism_values

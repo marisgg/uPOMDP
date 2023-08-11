@@ -105,12 +105,20 @@ class Log:
         self._duration = value
 
     @property
-    def cum_rewards(self):
-        return self._cum_rewards
+    def rnn_empirical_result(self):
+        return self._rnn_empirical_result
 
-    @cum_rewards.setter
-    def cum_rewards(self, value):
-        self._cum_rewards = value
+    @rnn_empirical_result.setter
+    def rnn_empirical_result(self, value):
+        self._rnn_empirical_result = value
+
+    @property
+    def fsc_empirical_result(self):
+        return self._rnn_empirical_result
+
+    @fsc_empirical_result.setter
+    def fsc_empirical_result(self, value):
+        self._fsc_empirical_result = value
 
     @property
     def evalues(self):
@@ -448,7 +456,7 @@ class Log:
             # Policy loss.
             ax = axs[0]
 
-            y_p = np.stack([log.policy_loss for log in run_log])
+            y_p = np.stack([log.a_loss for log in run_log])
             mean_p = np.mean(y_p, axis = 0).flatten()
             std_p = np.std(y_p, axis = 0).flatten()
 
@@ -493,24 +501,34 @@ class Log:
         print(logs, np.array(logs).shape)
         run_logs = np.array(logs).reshape(int(num_logs / logs[0].num_runs), logs[0].num_runs)
 
+        global_results_at_init = []
+        global_durations = []
+        global_values = []
+        global_rnn_empirical_results = []
+        global_fsc_empirical_results = []
+        global_all_static_values = []
+        global_ks = []
+        global_robust_values = []
+
         output = {}
         for run_log in run_logs:
             results_at_init = []
             durations = []
             values = []
-            cum_rewards = []
-            evalues = []
+            rnn_empirical_results = []
+            fsc_empirical_results = []
+            all_static_values = []
             ks = []
-            mc_values = []
+            robust_values = []
             for log in run_log:
                 (not_nans, ) = np.where(np.logical_not(np.isnan(log.result_at_init)))
                 last_valid_index = not_nans[-1]
                 results_at_init.append(log.result_at_init)
-                mc_values.append(log.interval_mc_value)
+                robust_values.append(log.robust_value)
                 durations.append(log.duration)
-                # values.append(log.value_at_init[last_valid_index])
-                cum_rewards.append(log.cum_rewards)
-                evalues.append(log.evalues)
+                rnn_empirical_results.append(log.rnn_empirical_result)
+                fsc_empirical_results.append(log.fsc_empirical_result)
+                all_static_values.append(log.static_values)
                 ks.append(log.k)
             def dict_helper(arr):
                 return {
@@ -520,30 +538,49 @@ class Log:
                     'max' : np.max(arr),
                     'median' : np.median(arr)
                 }
-            # plot_label = run_log[0].plot_label
-            evalues = np.array(evalues).squeeze()
-            print(evalues.shape)
+            all_static_values = np.array(all_static_values).squeeze()
             output['table'] = {
-                # 'stats' :{
-                'interval_mc_value' : dict_helper(mc_values),
+                'robust_value' : dict_helper(robust_values),
                 'result_at_init' : dict_helper(results_at_init),
                 'duration' : dict_helper(durations),
-                # 'value' : dict_helper(values),
-                'cum_reward' : dict_helper(cum_rewards),
-                'evalues' : dict_helper(evalues),
+                'rnn_empirical_results' : dict_helper(rnn_empirical_results),
+                'fsc_empirical_results' : dict_helper(fsc_empirical_results),
+                'static_values' : dict_helper(all_static_values),
                 'k' : dict_helper(ks),
-                # },
-                # 'imc_values' : np.array(mc_values).ravel(),
-                # 'e_values_0.1' : evalues[:, 0],
-                # 'e_values_0.2' : evalues[:, 1],
-                # 'e_values_0.3' : evalues[:, 2],
-                # 'e_values_0.4' : evalues[:, 3],
-                # 'empirical_cum_cost' : np.array(cum_rewards).ravel(),
-                # 'ks' : np.array(ks).ravel()
             }
+            global_robust_values.append(robust_values)
+            global_results_at_init.append(results_at_init)
+            global_durations.append(durations)
+            global_rnn_empirical_results.append(rnn_empirical_results)
+            global_fsc_empirical_results.append(fsc_empirical_results)
+            global_all_static_values.append(all_static_values)
+            global_ks.append(ks)
+
+        output['aggregated_over_runs'] = {
+                'mean_min_robust_value' : np.mean(np.min(global_robust_values, axis=-1)),
+                'mean_min_result_at_init' : np.mean(np.min(global_results_at_init, axis=-1)),
+                'mean_duration' : np.mean(global_durations,axis=-1).mean(),
+                'mean_min_rnn_empirical_results' : np.mean(np.min(global_rnn_empirical_results, axis=-1)),
+                'mean_min_fsc_empirical_results' : np.mean(np.min(global_fsc_empirical_results, axis=-1)),
+                'mean_min_mean_static_values' : np.mean(np.min(np.mean(all_static_values, axis=0), axis=-1)),
+                'mean_k' : np.mean(ks,axis=-1).mean()
+        }
 
         with open(f'{dir}/table.json', 'w+') as fp:
             json.dump(output, fp, indent = 4, default=float)
+
+        pickle_dict = {
+                'robust_value' : np.array(global_robust_values),
+                'result_at_init' : np.array(global_results_at_init),
+                'duration' : np.array(global_durations),
+                'rnn_empirical_results' : np.array(global_rnn_empirical_results),
+                'fsc_empirical_results' : np.array(global_fsc_empirical_results),
+                'static_values' : np.array(global_all_static_values),
+                'k' : np.array(global_ks)
+        }
+
+        with open(f"{dir}/aggregated_results.pickle", "wb") as handle:
+            pickle.dump(pickle_dict, handle)
 
         return
 

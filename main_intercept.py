@@ -12,5 +12,9 @@ for filename in load_file:
       cfg['a_loss'] = 'kld'
       cfg['train_deterministic'] = False
       cfg['specification'] = MDPSpec.Rminmax.value
-      exp = Experiment("both-" + cfg["name"], cfg, 1)
-      exp.execute(False)
+      exp = Experiment("INTERCEPT-" + cfg["name"], cfg, 30)
+      try:
+         exp.execute(True)
+      except Exception as e:
+         print("Run failed!", e)
+         print(e, file=open(f"./{exp.name}.exception", "w"))

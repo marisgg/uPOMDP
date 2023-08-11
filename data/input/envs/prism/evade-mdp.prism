@@ -77,5 +77,9 @@ rewards
     [west] true : 1;
     [east] true : 1;
     [scan] true : 1;
-    crash = true:100; 
+    [north] crash : 100 + 1;
+    [south] crash : 100 + 1;
+    [west] crash : 100 + 1;
+    [east] crash : 100 + 1;
+    [scan] crash : 100 + 1;
 endrewards

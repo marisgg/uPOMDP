@@ -14,9 +14,9 @@ for filename in load_file:
       cfg['a_loss'] = 'kld'
       cfg['train_deterministic'] = False
       cfg['specification'] = MDPSpec.Rminmax.value
-      exp = Experiment(f"Third-Real-Run-{i}-{cfg['name']}", cfg, 1)
-      # try:
-      exp.execute(False)
-      # except Exception as e:
-      #    print("Run failed!", e)
-      #    print(e, file=open(f"./{exp.name}.exception", "w"))
+      exp = Experiment(f"MAZE-SC-5-{i}-{cfg['name']}", cfg, 30)
+      try:
+         exp.execute(True)
+      except Exception as e:
+         print("Run failed!", e)
+         print(e, file=open(f"./{exp.name}.exception", "w"))
