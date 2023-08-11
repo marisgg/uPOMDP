@@ -60,51 +60,6 @@ class IPOMDP:
         self.imdp_Q = None
         self.imdp_V = None
 
-    @staticmethod
-    def get_direction(spec : MDPSpec, order : np.ndarray):
-        """
-        Nature's direction given the optimization target of the uMDP.
-        """
-        if spec in {MDPSpec.Rminmax, MDPSpec.Rmaxmin}:
-            return order[::-1] # reverse for pessimistic
-        else:
-            return order
-
-    @staticmethod
-    def compute_robust_value(R, V, order, lower, upper):
-        return R + IPOMDP.solve_inner_problem(order, lower, upper) @ V
-
-    @staticmethod
-    def solve_inner_problem(order, P_low, P_up):
-        nS = len(order)
-        T_inner = np.zeros(nS)
-
-        i = 0
-        t = order[i]
-        limit = P_low.sum()
-
-        assert (P_low <= P_up).all(), (P_low, P_up)
-
-        if np.isclose(limit, 0) and np.isclose(np.sum(P_up), 0):
-            # Sanity check, transition probability is 0.
-            return np.full(T_inner.shape, np.inf)
-
-        while not np.isclose(limit - P_low[t] + P_up[t], 1) and limit - P_low[t] + P_up[t] < 1:
-            limit = limit - P_low[t] + P_up[t]
-            T_inner[t] = P_up[t]
-            i += 1
-            t = order[i]
-
-        j = i
-        T_inner[t] = 1 - (np.round(limit, decimals=6) - P_low[t])
-        assert T_inner[t] >= 0, f"1 - ({limit} - {P_low[t]})"
-
-        for k in range(j + 1, nS):
-            t = order[k]
-            T_inner[t] = P_low[t]
-        assert not (T_inner < 0).any()
-        return T_inner
-
     def find_critical_pomdp_transitions(self, V : np.ndarray, instance : Instance, MC_T, fsc : FiniteMemoryPolicy, add_noise = 0, tolerance = 1e-6):
         nM = fsc.nM_generated
         if not fsc.is_masked:
@@ -429,7 +384,7 @@ class IPOMDP:
 
     def one_step_VI(self, V : np.ndarray, spec : MDPSpec, set_unreachable_to_nan = False):
         assert np.isfinite(V).all()
-        order = self.get_direction(spec, np.argsort(V))
+        order = IDTMC.get_direction(spec, np.argsort(V))
         assert np.count_nonzero(self.R) > 0
         if set_unreachable_to_nan:
             Q = np.full((self.nS, self.nA), np.nan)

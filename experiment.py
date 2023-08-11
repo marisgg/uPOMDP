@@ -230,7 +230,7 @@ class Experiment:
             nanarg = np.nanargmin if instance.objective == 'min' else np.nanargmax
 
             if deterministic_target_policy:
-                a_labels = utils.one_hot_encode(nanarg(q_values, axis = -1), pomdp.nA, dtype ='float32')[1:]
+                a_labels = utils.one_hot_encode(nanarg(q_values, axis = -1), pomdp.nA, dtype ='float32')
             else:
                 def softx(q_values, min=True):
                     return softmax(-q_values if min else q_values, axis=-1)

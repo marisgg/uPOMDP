@@ -18,15 +18,15 @@ for filename in filenames:
             cfg['train_deterministic'] = False
             cfg['rounds'] = 100
 
-            for setting in [{'dynamic_uncertainty' : False}, {'dynamic_uncertainty' : True}]:
+            for setting in [{'dynamic_uncertainty' : True}, {'dynamic_uncertainty' : False}]:
                 cfg.update(setting)
                 if cfg['dynamic_uncertainty']:
                     for spec in [MDPSpec.Rminmax, MDPSpec.Rminmin]:
                         cfg['specification'] = spec.value
-                        exp = Experiment(f'{GLOBAL_TITLE}-{cfg["name"]}-{str(spec.name)}', cfg, 30)
+                        exp = Experiment(f'{GLOBAL_TITLE}/{cfg["name"]}-{str(spec.name)}', cfg, 30)
                         exp.execute(True)
                 else:
                     spec = MDPSpec.Rminmax
                     cfg['specification'] = spec.value
-                    exp = Experiment(f'{GLOBAL_TITLE}-{cfg["name"]}-{str(spec.name)}-BASELINE', cfg, 30)
+                    exp = Experiment(f'{GLOBAL_TITLE}/{cfg["name"]}-{str(spec.name)}-BASELINE', cfg, 30)
                     exp.execute(True)

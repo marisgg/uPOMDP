@@ -2,7 +2,7 @@
 "formula_str":"Rmin=? [F \"goal\"]",
        "ctrx_gen":"crt_full",
        "rounds":100,
-       "p_init":{"sl":0.2},
+       "p_init":{"sl":0.25},
        "p_evals": [{"sl": 0.1}, {"sl": 0.2}, {"sl": 0.3}, {"sl": 0.4}],
        "p_bounds":{"sl":[0.1,0.4]},
        "dynamic_uncertainty" : true,
