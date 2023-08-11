@@ -269,6 +269,8 @@ class IPOMDP:
         labels_to_states = {}
         next_memories = fsc.randomized_next_memories(add = zero)
 
+        R = np.full(self.nS * nM, np.nan)
+
         for (s,a) in self.T.keys():
             o = self.pPOMDP.O[s]
             observation_label = self.pPOMDP.observation_labels[o]
@@ -298,6 +300,8 @@ class IPOMDP:
                         if self.P[(s, a)][next_s]:
                             derivative = self.D[(s, a)][next_s]
                             constant = self.C[(s, a)][next_s]
+                            if derivative == 0 and constant == 0:
+                                continue
                             if prod_next_state not in D[prod_state]:
                                 D[prod_state][prod_next_state] = derivative * fsc_prob
                             else:
@@ -305,7 +309,7 @@ class IPOMDP:
                             if prod_next_state not in C[prod_state]:
                                 C[prod_state][prod_next_state] = constant * fsc_prob
                             else:
-                                C[prod_state][prod_next_state] += constant * fsc_prob
+                                C[prod_state][prod_next_state] += constant * fsc_prob 
                         else:
                             assert self.T[(s, a)][next_s][0] == self.T[(s, a)][next_s][1], (self.T[(s, a)][next_s][0], self.T[(s, a)][next_s][1])
                             if prod_next_state not in T[prod_state]:
@@ -314,9 +318,10 @@ class IPOMDP:
                                 T[prod_state][prod_next_state] += self.T[(s, a)][next_s][0] * fsc_prob
                         has_outgoing = True
                 if self.state_action_rewards:
-                    rewards_strs[0] += f'\ts={prod_state} : {sum([fsc.action_distributions[m, o, a] * self.R[s, a] for a in range(self.nA)])};\n'
+                    # rewards_strs[0] += f'\ts={prod_state} : {sum([fsc.action_distributions[m, o, a] * self.R[s, a] for a in range(self.nA)])};\n'
+                    R[prod_state] = sum([fsc.action_distributions[m, o, a] * self.R[s, a] for a in range(self.nA)])
                 else:
-                    rewards_strs[0] += f'\ts={prod_state} : {self.R[s]};\n'
+                    R[prod_state] = self.R[s]
 
         # # Reachability analysis, delete labels of unreachable states.
         # hops = np.full((self.pomdp.nS * nM), np.inf) # k-hops from init to each state.
@@ -358,14 +363,17 @@ class IPOMDP:
                     print(T, D, C, sep='\n')
                     raise ValueError("Non-parametric transition that has a negative probability.")
             for next_s in D[s].keys():
-                if self.P[(s, next_s)]:
-                    derivative = D[s][next_s]
-                    constant = C[s][next_s]
-                    transitions_string += f" ({constant} + {derivative}*{list(self.intervals.keys())[0]}) : (s'={next_s}) +"
-                    has_outgoing = True
+                if D[s][next_s] == 0 and C[s][next_s] == 0:
+                    continue
+                derivative = D[s][next_s]
+                constant = C[s][next_s]
+                transitions_string += f" ({constant} + {derivative}*{list(self.intervals.keys())[0]}) : (s'={next_s}) +"
+                has_outgoing = True
 
             if has_outgoing:
                 transitions_strings += transitions_string[:-2] + ';\n'
+            
+            rewards_strs[0] += f's={s} : {R[s]};\n'
 
         rewards_strs = ['true : 0;'] if len(rewards_strs) == 0 else rewards_strs
         contents = in_out.pdtmc_string(p_string, self.nS, nM, transitions_strings, label_strings, rewards_strs[0])
@@ -386,7 +394,7 @@ class IPOMDP:
         
         from models import PDTMCModelWrapper
 
-        pdtmc = PDTMCModelWrapper(model, self.pPOMDP, nM, p_region_dict, state_labels, memory_labels)
+        pdtmc = PDTMCModelWrapper(model, self.pPOMDP, nM, p_region_dict, state_labels, memory_labels, fn)
         # if pdtmc.nS != np.count_nonzero(hops < np.inf):
             # raise ValueError('Inaccuracies after translating PDTMC to Stormpy model.')
         return pdtmc
