@@ -499,7 +499,12 @@ class Log:
     def output_benchmark_table(logs, dir):
         num_logs = len(logs)
         print(logs, np.array(logs).shape)
-        run_logs = np.array(logs).reshape(int(num_logs / logs[0].num_runs), logs[0].num_runs)
+        try:
+            run_logs = np.array(logs).reshape(int(num_logs / logs[0].num_runs), logs[0].num_runs)
+        except:
+            run_logs = np.array(logs).ravel()[np.newaxis, ...]
+        
+        print(run_logs.shape)
 
         global_results_at_init = []
         global_durations = []

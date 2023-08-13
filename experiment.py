@@ -81,8 +81,8 @@ class Experiment:
         pomdp : POMDPWrapper = instance.build_pomdp()
         ps = cfg['p_init']
         worst_ps = ps
-        if 'u' not in cfg['policy']:
-            mdp = instance.build_mdp(ps)
+        # if 'u' not in cfg['policy']:
+        mdp = instance.build_mdp(ps)
         length = instance.simulation_length()
         checker = Checker(instance, cfg)
         net = Net(instance, cfg)
@@ -103,20 +103,20 @@ class Experiment:
         nominal_parameters = {name : (cfg['p_init'][name], cfg['p_init'][name]) for name in cfg['p_bounds'].keys()}
         nominal_pomdp = IPOMDP(instance, pomdp, nominal_parameters, mdp_goal_states)
 
-        if 'u' in cfg['policy']:
+        np.set_printoptions(threshold=sys.maxsize)
+
+        if dynamic_uncertainty:
             Q = ipomdp.mdp_action_values(spec)
             utils.inform(f'Synthesized iMDP-policy (min: {np.nanmin(Q):.2f}, max: {np.nanmax(Q):.2f}) w/ value = {ipomdp.imdp_V[pomdp.initial_state]}')
-            print(Q)
+            print(Q, file=open(f"{log.base_output_dir}/{cfg_idx}/{run_idx}/MDP-Q.txt", 'w'))
             print(Q[pomdp.initial_state])
             print(Q.shape, ipomdp.imdp_V[pomdp.initial_state[0]])
         else:
             Q = nominal_pomdp.mdp_action_values(spec)
             utils.inform(f'Synthesized nominal ({nominal_parameters}) MDP-policy (min: {np.nanmin(Q):.2f}, max: {np.nanmax(Q):.2f}) w/ value = {nominal_pomdp.imdp_V[pomdp.initial_state]}')
-            print(Q)
+            print(Q, file=open(f"{log.base_output_dir}/{cfg_idx}/{run_idx}/MDP-Q.txt", 'w'))
             print(Q[pomdp.initial_state])
             print(Q.shape, nominal_pomdp.imdp_V[pomdp.initial_state[0]])
-
-        # np.set_printoptions(threshold=sys.maxsize)
 
         utils.inform(f'{run_idx}\t(empir)\t\t(s,a)-rewards: {ipomdp.state_action_rewards}')
 
@@ -138,11 +138,11 @@ class Experiment:
             num_actions = pomdp.num_choices_per_state[states]
 
             observation_labels = pomdp.observation_labels[observations]
-            empirical_result, _ = utils.evaluate_performance(instance, states, rewards)
+            rnn_empirical_result, _ = utils.evaluate_performance(instance, states, rewards)
 
 
             utils.inform(f'{run_idx}-{round_idx}\t(belief)\t\t{np.count_nonzero(beliefs)} non-zero entries\t', indent = 0)
-            utils.inform(f'{run_idx}-{round_idx}\t(RNN)\t\tempir\t%.4f' % empirical_result, indent = 0)
+            utils.inform(f'{run_idx}-{round_idx}\t(RNN)\t\tempir\t%.4f' % rnn_empirical_result + f" {'(nominal)' if round_idx == 0 or not dynamic_uncertainty else '(worst-case)'}", indent = 0)
             
             # valid = empirical_result < 4 * mdp.state_values[0]
 
@@ -208,7 +208,7 @@ class Experiment:
 
             length = instance.simulation_length()                
 
-            nan_fixer = 1e6 if instance.objective == 'min' else -1e6
+            nan_fixer = 1e10 if instance.objective == 'min' else -1e10
 
             if cfg['policy'].lower() == 'mdp':
                 q_values = mdp.action_values[states]
@@ -249,9 +249,9 @@ class Experiment:
 
             log.flush(cfg_idx, run_idx, nM = fsc.nM_generated, lb = check._lb_values[0], ub = check._ub_values[0],
                       ps = ps, robust_value = V[0],
-                      static_values = evalues, rnn_empirical_result = empirical_result, fsc_empirical_result=fsc_empirical_result, mdp_policy_q = q_values, a_labels = a_labels, a_loss = np.array(a_loss), r_loss = np.array(r_loss),
+                      static_values = evalues, rnn_empirical_result = rnn_empirical_result, fsc_empirical_result=fsc_empirical_result, mdp_policy_q = q_values, a_labels = a_labels, a_loss = np.array(a_loss), r_loss = np.array(r_loss),
                       fsc_entropy = fsc_entropy, rnn_entropy = rnn_entropy, cross_entropy = cross_entropy, label_cross_entropy = label_cross_entropy)
 
             utils.inform(f'{run_idx}-{round_idx}\t(RNN)\t\taloss \t%.4f' % a_loss[0] + '\t>>>> %3.4f' % a_loss[-1], indent = 0)
-        log.collect(result_at_init=check.result_at_init,duration=time.time()-log.time, rnn_empirical_result = empirical_result, fsc_empirical_result=fsc_empirical_result, static_values=evalues, k=fsc.nM_generated, robust_value = V[0])
+        log.collect(result_at_init=check.result_at_init,duration=time.time()-log.time, rnn_empirical_result = rnn_empirical_result, fsc_empirical_result=fsc_empirical_result, static_values=evalues, k=fsc.nM_generated, robust_value = V[0])
         return log

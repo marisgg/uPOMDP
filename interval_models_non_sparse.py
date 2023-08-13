@@ -326,7 +326,7 @@ class IPOMDP:
             dt_str = datetime.now().strftime("%Y%m%d%H%M%S%f")
             value_file = f"data/cache/Q-{dt_str}.txt"
             property = f"{spec.name}=? [ F \"goal\" ]"
-            output = subprocess.run(["prism/prism-4.8/bin/prism", f"{self.instance.prism_path_without_extension}-mdp.prism", "-maxiters", str(int(1e6)), "-zerorewardcheck", "-nocompact", "-pf", property, "-exportvector", value_file, "-const", f'sll={min(self.intervals["sl"])}', "-const", f'slu={max(self.intervals["sl"])}'], check=True, capture_output=True)
+            output = subprocess.run(["prism/prism/bin/prism", f"{self.instance.prism_path_without_extension}-mdp.prism", "-maxiters", str(int(1e6)), "-zerorewardcheck", "-nocompact", "-pf", property, "-exportvector", value_file, "-const", f'sll={min(self.intervals["sl"])}', "-const", f'slu={max(self.intervals["sl"])}'], check=True, capture_output=True)
             try:
                 with open(value_file, 'r') as input:
                     V = np.array([float(line.rstrip()) for line in input], dtype=float)
@@ -466,6 +466,7 @@ class IDTMC:
         self.unreachable_states = unreachable_states
         self.T_upper : np.ndarray = T_upper   # 2D: (nS * nM) x (nS * nM)
         self.T_lower : np.ndarray = T_lower # 2D: (nS * nM) x (nS * nM)
+        self.nS = self.T_lower.shape[0]
         assert (T_lower <= T_upper).all()
         assert self.T_upper.ndim == self.T_lower.ndim == 2
         self.R = np.array(rewards, dtype=float)                # 1D: (nS * nM)
@@ -578,7 +579,7 @@ class IDTMC:
                 property = "Rmax=? [ F \"goal\" ]"
             else:
                 property = "Rmin=? [ F \"goal\" ]"
-            output = subprocess.run(["prism/prism-4.8/bin/prism", self.materialized_idtmc_filename, "-maxiters", str(int(1e6)), "-zerorewardcheck", "-nocompact", "-pf", property, "-exportvector", value_file], check=True, capture_output=True)
+            output = subprocess.run(["prism/prism/bin/prism", self.materialized_idtmc_filename, "-maxiters", str(int(1e6)), "-zerorewardcheck", "-nocompact", "-pf", property, "-exportvector", value_file], check=True, capture_output=True)
             V = np.zeros(self.T_lower.shape[0], dtype=float)
             try:
                 with open(value_file, 'r') as input:

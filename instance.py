@@ -160,16 +160,16 @@ class Instance:
             else:
                 model = stormpy.build_sparse_model_with_options(prism_program, options)
 
-        elif self.pomdp.is_parametric:
-            instantiator = stormpy.pars.ModelInstantiator(self.pomdp.model)
-            points = {p : stormpy.RationalRF(value) for p, value in p_values.items()}
-            model = instantiator.instantiate(points)
-            components = stormpy.SparseModelComponents(
-                transition_matrix = model.transition_matrix,
-                state_labeling = model.labeling,
-                reward_models = model.reward_models,
-                rate_transitions = False)
-            model =  stormpy.storage.SparseMdp(components)
+        # elif self.pomdp.is_parametric:
+        #     instantiator = stormpy.pars.ModelInstantiator(self.pomdp.model)
+        #     points = {p : stormpy.RationalRF(value) for p, value in p_values.items()}
+        #     model = instantiator.instantiate(points)
+        #     components = stormpy.SparseModelComponents(
+        #         transition_matrix = model.transition_matrix,
+        #         state_labeling = model.labeling,
+        #         reward_models = model.reward_models,
+        #         rate_transitions = False)
+        #     model =  stormpy.storage.SparseMdp(components)
         else:
             transition_matrix, labeling, reward_models = self.pomdp.model_components(p_values)
             components = stormpy.SparseModelComponents(

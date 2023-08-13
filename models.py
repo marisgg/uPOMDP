@@ -36,7 +36,7 @@ class Wrapper:
             self.p_names = [p.name for p in self.probability_parameters]
 
         self.O = O
-        # self.T, self.C, self.A, self.S, self.P, self.D = utils.parse_transitions(model, self.p_names, check=True)
+        self.T, self.C, self.A, self.S, self.P, self.D = utils.parse_transitions(model, self.p_names, check=True)
         self.transition_matrix = model.transition_matrix
         self.labeling = model.labeling
 
