@@ -22,6 +22,7 @@ from instance import Instance
 from check import Checker
 from in_out import Log, clear_cache
 import utils
+import random
 
 class Experiment:
     """ Represents a set of cfgs that serve an experiment. """
@@ -38,11 +39,13 @@ class Experiment:
         self.cfgs.append(configuration)
 
 
-    def execute(self, multi_thread):
+    def execute(self, multi_thread, seeds):
+        assert len(seeds) == self.num_runs, f"len(seeds) != self.num_runs <=> {len(seeds)} != {self.num_runs}. Specify seeds for the runs!"
+        self.cfg['seeds'] = tuple(seeds)
         log = Log(self)
         logs = []
         if multi_thread:
-            logs = Parallel(n_jobs = min(self.num_runs, multiprocessing.cpu_count()-1))(delayed(self._run)(copy.deepcopy(log), cfg_idx, run_idx) for cfg_idx in range(len(self.cfgs)) for run_idx in range(self.num_runs))
+            logs = Parallel(n_jobs = min(self.num_runs, multiprocessing.cpu_count()-1))(delayed(self._run)(copy.deepcopy(log), cfg_idx, run_idx, seeds[run_idx]) for cfg_idx in range(len(self.cfgs)) for run_idx in range(self.num_runs))
         else:
             for cfg_idx in range(len(self.cfgs)):
                 for run_idx in range(self.num_runs):
@@ -69,10 +72,16 @@ class Experiment:
             print(e, file=open(f"{log.base_output_dir}/{cfg_idx}/{run_idx}/exception.log", 'w'))
             return None
 
-    def run(self, log, cfg_idx, run_idx):
+    def run(self, log, cfg_idx, run_idx, seed):
+
+        cfg
 
         pycarl.clear_pools()
         tf.keras.backend.clear_session()
+
+        np.random.seed(seed)
+        tf.random.set_seed(seed)
+        random.seed(seed)
 
         utils.inform(f'Starting run {run_idx}.', indent = 0, itype = 'OKBLUE')
 
@@ -194,7 +203,8 @@ class Experiment:
                 fsc_rewards = fsc.simulate_fsc(ipomdp, pomdp, T, greedy = False, length = length, batch_dim = instance.cfg['batch_dim'])
                 fsc_empirical_result, _ = utils.evaluate_performance(instance, states, fsc_rewards)
             else:
-                fsc_empirical_result = np.nan
+                fsc_empirical_result = fsc.simulate_fsc_with_normal_T(ipomdp, pomdp, greedy = False, length = length, batch_dim = instance.cfg['batch_dim'])
+                fsc_empirical_result, _ = utils.evaluate_performance(instance, states, fsc_rewards)
 
             utils.inform(f'{run_idx}-{round_idx}\t(FSC)\t\tempir\t%.4f' % fsc_empirical_result, indent = 0)
 

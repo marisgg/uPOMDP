@@ -74,7 +74,7 @@ class IPOMDP:
         rewards_for_states = set()
 
         for (s,a), next_s_dict in self.T.items():
-            trans_string = f"[{a}] (s={s}) -> " 
+            trans_string = f"[a{a}] (s={s}) -> " 
             first = True
             for next_s, interval in next_s_dict.items():
                 if interval[0] > 0:
@@ -87,7 +87,7 @@ class IPOMDP:
                     else:
                         trans_string += f"[{interval[0]}, {interval[1]}] : (s'={next_s})"
             if self.state_action_rewards:
-                rewards_strings += f'[a] s={s} : {self.R[s, a]};\n'
+                rewards_strings += f'[a{a}] s={s} : {self.R[s, a]};\n'
             elif s not in rewards_for_states:
                 rewards_strings += f's={s} : {self.R[s]};\n'
                 rewards_for_states.add(s)

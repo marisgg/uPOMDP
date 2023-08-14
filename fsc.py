@@ -105,6 +105,35 @@ class FiniteMemoryPolicy:
         if not np.all(np.isclose(sums, 1)):
             raise ValueError(f'Distributions do not sum up to (close to) 0, 1, or are NaN. Sums are: \n{sums}')
         return True
+    
+    def simulate_fsc_with_normal_T(self, ipomdp, pomdp : POMDPWrapper, batch_dim, length, greedy = False):
+        """ Simulates an interaction of this HxQBN-GRU-RNN with a POMDP model application. """
+        assert batch_dim == self.batch_dim
+
+        states = np.zeros((batch_dim, length), dtype = 'int64')
+        rewards = np.zeros((batch_dim, length, pomdp.num_reward_models), dtype = 'float64')
+
+        state = np.array([np.squeeze(pomdp.initial_state) for b in range(batch_dim)], dtype = 'int64')
+        observation = np.array([np.squeeze(pomdp.initial_observation) for b in range(batch_dim)], dtype = 'int64')
+
+        belief = np.zeros((batch_dim, pomdp.nS))
+        belief[:, pomdp.initial_state] = 1
+
+        assert self.is_masked
+
+        for l in range(length):
+
+            states[:, l] = state
+            action = self.action(observation, greedy=greedy)
+
+            rewards[:, l, :] = ipomdp.R[state, action][..., np.newaxis] if ipomdp.state_action_rewards else ipomdp.R[state][..., np.newaxis]
+            for b in range(batch_dim):
+                possible_states = list(ipomdp.T[(state[b], action[b])].keys())
+                probs = ipomdp.T[(state[b], action[b])].values()
+                state[b] = random.choices(possible_states, weights=probs, k=1)[0]
+            observation = pomdp.O[state]
+        
+        return rewards
 
     def simulate_fsc(self, ipomdp, pomdp : POMDPWrapper, T : np.ndarray, batch_dim, length, greedy = False):
         """ Simulates an interaction of this HxQBN-GRU-RNN with a POMDP model application. """

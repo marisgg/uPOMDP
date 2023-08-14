@@ -88,17 +88,15 @@ class Wrapper:
         self.reward_models = model.reward_models
         self.num_reward_models = len(self.reward_models)
         self.reward_bases = {}
-        self.rewards = np.zeros((self.nS, self.num_reward_models), dtype = 'float64')
+        # self.rewards = np.zeros((self.nS, self.num_reward_models), dtype = 'float64')
 
-        for r, reward_model_str in enumerate(self.reward_models):
-            reward_model = self.reward_models[reward_model_str]
-            if reward_model.has_state_rewards:
-                self.reward_bases[reward_model_str] = 'state'
-                for s in range(self.nS):
-                    self.rewards[s, r] = utils.value_to_float(reward_model.state_rewards[s])
-            else:
-                pass
-                # raise NotImplementedError('Only state-based rewards are implemented.')
+        # for r, reward_model_str in enumerate(self.reward_models):
+        #     reward_model = self.reward_models[reward_model_str]
+        #     if reward_model.has_state_rewards:
+        #         self.reward_bases[reward_model_str] = 'state'
+        #         for s in range(self.nS):
+        #             self.rewards[s, r] = utils.value_to_float(reward_model.state_rewards[s])
+        #     else:
 
             #     self.reward_bases[reward_model_str] = 'state_action'
             #     rewards = reward_model.state_action_rewards

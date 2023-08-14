@@ -6,10 +6,14 @@ from datetime import datetime
 filenames = ['SC_maze_5'] #, 'intercept', 'evade', 'avoid']
 
 GLOBAL_TITLE = "SECOND-RUN-" + datetime.now().strftime("%Y-%m-%d_%H:%M:%S%f")
-GLOBAL_TITLE = "THIRD-RUN-14-08-2023-ALL"
+GLOBAL_TITLE = "DRY-RUN-14-08-2023_15:05"
 
-NUM_RUNS = 30
-MULTITHREAD = True
+NUM_RUNS = 1
+MULTITHREAD = False
+
+all_seeds = list(range(100))
+
+run_seeds = all_seeds[:30]
 
 for filename in filenames:
     with open('data/input/cfgs/'+filename+'.json') as f:
@@ -18,11 +22,14 @@ for filename in filenames:
     for filename in load_file:
         for cfg in load_file[filename]:
             
-            cfg['batch_dim'] = 128
-            cfg['rounds'] = 100
+            cfg['batch_dim'] = 4
+            cfg['rounds'] = 2
 
             for det_setting in [{'train_deterministic' : False}, {'train_deterministic' : True}]:
                 cfg.update(det_setting)
+
+                if cfg['train_deterministic']:
+                    continue
 
                 if cfg['train_deterministic']:
                     cfg['a_loss'] = 'cce'
@@ -39,7 +46,7 @@ for filename in filenames:
                                 cfg['specification'] = spec.value
                                 exp = Experiment(f'{GLOBAL_TITLE}/{"train_deterministic" if cfg["train_deterministic"] else "train_stochastic"}/maxk={3**cfg["bottleneck_dim"]}/{cfg["name"]}-{str(spec.name)}', cfg, NUM_RUNS)
                                 try:
-                                    exp.execute(MULTITHREAD)
+                                    exp.execute(MULTITHREAD, run_seeds)
                                 except Exception as e:
                                     print("Run failed: ", e)
                         else:
@@ -47,6 +54,6 @@ for filename in filenames:
                             cfg['specification'] = spec.value
                             exp = Experiment(f'{GLOBAL_TITLE}/{"train_deterministic" if cfg["train_deterministic"] else "train_stochastic"}/maxk={3**cfg["bottleneck_dim"]}/{cfg["name"]}-{str(spec.name)}-BASELINE', cfg, NUM_RUNS)
                             try:
-                                exp.execute(MULTITHREAD)
+                                exp.execute(MULTITHREAD, run_seeds)
                             except Exception as e:
                                 print("Run failed: ", e)

@@ -194,7 +194,7 @@ class Instance:
             self._remember_labels()
             return self.mdp
 
-    def instantiate_pdtmc(self, fsc, zero = 1e-8):
+    def instantiate_pdtmc(self, fsc, zero = 1e-8, remove_file_from_disk = True):
         """
         Instantiates the (p)DTMC, which is parameterized by values of the policy.
 
@@ -330,7 +330,8 @@ class Instance:
         contents = in_out.pdtmc_string(p_string, self.pomdp.nS, nM, transitions_strings, label_strings, rewards_strs[0])
         fn = in_out.cache_pdtmc(contents)
         prism_program = stormpy.parse_prism_program(fn, simplify = False)
-        # os.remove(fn)
+        if remove_file_from_disk:
+            os.remove(fn)
         if self.pomdp.is_parametric:
             model = stormpy.build_sparse_parametric_model(prism_program)
             p_region_dict = {
