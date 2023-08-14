@@ -97,5 +97,7 @@ endmodule
 rewards
 	s<22: 1;
 endrewards
-label "goal" = o=7;
-label "bad" = o=6;
+
+//label "goal" = o=7;
+//label "bad" = o=6;
+label "goal" = s = 22;

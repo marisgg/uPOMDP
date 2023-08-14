@@ -3,9 +3,10 @@ from experiment import Experiment
 from interval_models import MDPSpec
 from datetime import datetime
 
-filenames = ['SC_maze_5', 'intercept', 'evade', 'avoid']
+filenames = ['SC_maze_5'] #, 'intercept', 'evade', 'avoid']
 
-GLOBAL_TITLE = "SECOND-RUN-" + datetime.now().strftime("%Y/%m/%d-%H:%M:%S%f")
+GLOBAL_TITLE = "SECOND-RUN-" + datetime.now().strftime("%Y-%m-%d_%H:%M:%S%f")
+GLOBAL_TITLE = "THIRD-RUN-14-08-2023-ALL"
 
 NUM_RUNS = 30
 MULTITHREAD = True

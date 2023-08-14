@@ -52,13 +52,65 @@ class IPOMDP:
         self.R = np.array(self.reward_models[0])
         assert np.count_nonzero(self.R) > 0
         self.state_action_rewards = len(self.R.shape) > 1
+        self.reward_zero_states = set(target_states)
+        # print(self.R)
+        # if self.state_action_rewards:
+            # assert set(np.where(np.isclose(self.R.sum(axis=-1), 0))[0].tolist()) == self.reward_zero_states, set(np.where(np.isclose(self.R.sum(axis=-1), 0))[0].tolist())
 
         self.nS = pPOMDP.nS
         self.nA = pPOMDP.nA
         # self.reward_zero_states, self.reward_inf_states = self.preprocess(target_states)
-        self.reward_zero_states = set(target_states)
+
+        if USE_PRISM_IMDP:
+            self.prism_file = self.to_prism_file()
+        
         self.imdp_Q = None
         self.imdp_V = None
+    
+    def to_prism_file(self):
+        all_trans_strings = ""
+        rewards_strings = ""
+
+        rewards_for_states = set()
+
+        for (s,a), next_s_dict in self.T.items():
+            trans_string = f"[{a}] (s={s}) -> " 
+            first = True
+            for next_s, interval in next_s_dict.items():
+                if interval[0] > 0:
+                    if first:
+                        first = False
+                    else:
+                        trans_string += " + "
+                    if np.isclose(interval[0], interval[1]):
+                        trans_string += f"{interval[0]} : (s'={next_s})"
+                    else:
+                        trans_string += f"[{interval[0]}, {interval[1]}] : (s'={next_s})"
+            if self.state_action_rewards:
+                rewards_strings += f'[a] s={s} : {self.R[s, a]};\n'
+            elif s not in rewards_for_states:
+                rewards_strings += f's={s} : {self.R[s]};\n'
+                rewards_for_states.add(s)
+            if first:
+                trans_string = ""
+            else:
+                trans_string += ';\n'
+            
+            all_trans_strings += trans_string
+
+            
+        label_string = 'label "goal" ='
+        first = True
+        for s in list(self.reward_zero_states):
+            if first:
+                first = False
+            else:
+                label_string += " | "
+            label_string += f"(s={s})"
+        label_string += ';'
+        
+        file = in_out.cache_pdtmc(in_out._imdp_string(all_trans_strings, label_string, rewards_strings, self.nS), model_str='imdp')
+        return file
 
     def find_critical_pomdp_transitions(self, V : np.ndarray, instance : Instance, MC_T, fsc : FiniteMemoryPolicy, add_noise = 0, tolerance = 1e-6):
         nM = fsc.nM_generated
@@ -287,6 +339,8 @@ class IPOMDP:
                     R[prod_state] = sum([fsc.action_distributions[m, o, a] * self.R[s, a] for a in range(self.nA)])
                 else:
                     R[prod_state] = self.R[s]
+        
+        assert np.isfinite(R).all(), R
 
         p_string = ''
         for idx, p in enumerate(ps):
@@ -383,9 +437,10 @@ class IPOMDP:
         return reward_zero_states, reward_inf_states
 
     def one_step_VI(self, V : np.ndarray, spec : MDPSpec, set_unreachable_to_nan = False):
-        assert np.isfinite(V).all()
+        assert np.isfinite(V).all(), V
+
         order = IDTMC.get_direction(spec, np.argsort(V))
-        assert np.count_nonzero(self.R) > 0
+        
         if set_unreachable_to_nan:
             Q = np.full((self.nS, self.nA), np.nan)
         else:
@@ -396,10 +451,15 @@ class IPOMDP:
             else:
                 if not any([self.P[(s,a)][next_s] for next_s in next_states_dict.keys()]):
                     next_s_transition = {next_s : interval[0] for next_s, interval in next_states_dict.items()}
+                    print("Certain transitions:")
+                    print(next_s_transition)
                     assert np.isclose(sum(next_s_transition.values()), 1), (next_s_transition.values(), sum(next_s_transition.values()))
                     Q[s, a] = (self.R[s,a] if self.state_action_rewards else self.R[s]) + sum([V[next_state_idx] * prob for next_state_idx, prob in next_s_transition.items()])
                 else:
+                    print("Uncertain transitions:")
+                    print(next_states_dict)
                     next_s_transition = IDTMC.solve_sparse_problem(order, next_states_dict)
+                    print(next_s_transition)
                     assert np.isclose(sum(next_s_transition.values()), 1), (next_s_transition.values(), sum(next_s_transition.values()))
                     Q[s, a] = (self.R[s,a] if self.state_action_rewards else self.R[s]) + sum([V[next_state_idx] * prob for next_state_idx, prob in next_s_transition.items()])
         return Q
@@ -407,9 +467,11 @@ class IPOMDP:
     def mdp_action_values(self, spec : MDPSpec, epsilon=1e-6, max_iters=1e4) -> np.ndarray:
         if USE_PRISM_IMDP:
             dt_str = datetime.now().strftime("%Y%m%d%H%M%S%f")
+            print(self.reward_zero_states)
             value_file = f"data/cache/Q-{dt_str}.txt"
             property = f"{spec.name}=? [ F \"goal\" ]"
-            args = [PRISM_PATH, f"{self.instance.prism_path_without_extension}-mdp.prism", "-maxiters", str(int(1e6)), "-zerorewardcheck", "-nocompact", "-pf", property, "-exportvector", value_file, "-const", f'sll={min(self.intervals["sl"])}', "-const", f'slu={max(self.intervals["sl"])}']
+            args = [PRISM_PATH, self.prism_file, "-maxiters", str(int(1e6)), "-zerorewardcheck", "-nocompact", "-pf", property, "-exportvector", value_file]
+            # args = [PRISM_PATH, f"{self.instance.prism_path_without_extension}-mdp.prism", "-maxiters", str(int(1e6)), "-zerorewardcheck", "-nocompact", "-pf", property, "-exportvector", value_file, "-const", f'sll={min(self.intervals["sl"])}', "-const", f'slu={max(self.intervals["sl"])}']
             try:
                 output = subprocess.run(args, check=True, capture_output=True)
             except Exception as e:
@@ -429,7 +491,7 @@ class IPOMDP:
             assert V.size == self.nS, (V.size, self.nS)
             Q = self.one_step_VI(V, spec, set_unreachable_to_nan=True)
 
-            # assert np.allclose(Q.min(axis=-1), V), np.concatenate((np.expand_dims(np.nanmin(Q, axis=-1), axis=-1), np.expand_dims(V, axis=-1)), axis=-1)
+            assert np.allclose(np.nanmin(Q, axis=-1), V), np.concatenate((np.expand_dims(np.nanmin(Q, axis=-1), axis=-1), np.expand_dims(V, axis=-1)), axis=-1)
 
             self.imdp_Q = Q
             self.imdp_V = V
@@ -453,8 +515,6 @@ class IPOMDP:
         error = 1.0
         iters = 0
         while error > epsilon and iters < max_iters:
-            order = IDTMC.get_direction(spec, np.argsort(V))
-
             v_next = np.full(self.nS, np.inf)
             q_next = np.full((self.nS, self.nA), np.inf)
 
@@ -463,17 +523,15 @@ class IPOMDP:
             v_next = q_next.min(axis=-1) if min else q_next.max(axis=-1)
 
             error = np.abs(v_next - V).max()
+            assert np.isfinite(v_next).all()
+            assert np.isfinite(q_next).all()
             V = v_next
             Q = q_next
             iters += 1
         
         self.imdp_Q = Q = self.one_step_VI(V, spec, set_unreachable_to_nan=True)
-        self.imdp_V = np.full(self.nS, np.nan)
+        self.imdp_V = np.nanmin(Q, axis=-1)
 
-
-
-        self.imdp_Q = Q
-        self.imdp_V = V
         return self.imdp_Q
 
     @staticmethod
@@ -512,12 +570,14 @@ class IPOMDP:
         C = {}
 
         for state in model.states:
+            s = state.id
             for action in state.actions:
-                if (state.id, action.id) not in T:
-                    T[(state.id, action.id)] = {}
-                    P[(state.id, action.id)] = {}
-                    D[(state.id, action.id)] = {}
-                    C[(state.id, action.id)] = {}
+                a = action.id
+                if (s, a) not in T:
+                    T[(s, a)] = {}
+                    P[(s, a)] = {}
+                    D[(s, a)] = {}
+                    C[(s, a)] = {}
                 for transition in action.transitions:
                     next_state = transition.column
                     value = transition.value()
@@ -526,13 +586,13 @@ class IPOMDP:
                         numerator = value.numerator.coefficient
                         parsed = float(str(numerator)) / float(str(denominator))
                         lower = upper = parsed
-                        P[(state.id, action.id)][next_state] = False
+                        P[(s, a)][next_state] = False
                         if debug: print("Value:", value, "parsed:", parsed)
                     else:
-                        lower, upper, C[(state.id, action.id)][next_state], D[(state.id, action.id)][next_state] = IPOMDP.parse_parametric_transition(value, p_names, intervals, return_constants_and_derivatives=True)
-                        P[(state.id, action.id)][next_state] = True
-                        if debug: print(f"Found interval [{lower}, {upper}] for transition {state}, {action.id}, {next_state} resulting from {value} and {intervals}")
-                    T[(state.id, action.id)][next_state] = (lower, upper)
+                        lower, upper, C[(s, a)][next_state], D[(s, a)][next_state] = IPOMDP.parse_parametric_transition(value, p_names, intervals, return_constants_and_derivatives=True)
+                        P[(s, a)][next_state] = True
+                        if debug: print(f"Found interval [{lower}, {upper}] for transition {s}, {a}, {next_state} resulting from {value} and {intervals}")
+                    T[(s, a)][next_state] = (lower, upper)
         return T, P, C, D
         
 
@@ -592,7 +652,7 @@ class IDTMC:
             label_string += f"(s={s})"
         label_string += ';'
         
-        file = in_out.cache_pdtmc(in_out._pdtmc_string("", self.nS, all_trans_strings, label_string, rewards_strings))
+        file = in_out.cache_pdtmc(in_out._pdtmc_string("", self.nS, all_trans_strings, label_string, rewards_strings), model_str='idtmc')
         return file
 
     def preprocess(self, target):
@@ -638,6 +698,7 @@ class IDTMC:
         order = sorted(state_ids, key=lambda x : order.tolist().index(x))
         intervals = np.array(list(next_s_map.values()))
         lower_bounds, upper_bounds = intervals[:, 0], intervals[:, 1]
+        assert (lower_bounds <= upper_bounds).all()
 
         i = 0
         t = order[i]
@@ -648,8 +709,6 @@ class IDTMC:
             limit = limit - lower_bounds[t_idx] + upper_bounds[t_idx]
             next_s_resolved_map[t] = upper_bounds[t_idx]
             i += 1
-            # if i == len(order):
-                # break
             try:
                 t = order[i]
             except IndexError as ie:
@@ -667,24 +726,30 @@ class IDTMC:
         return next_s_resolved_map
 
 
-    def find_transition_model(self, V : np.ndarray, spec : MDPSpec):
+    def find_transition_model(self, V : np.ndarray, spec : MDPSpec, sanity_check=True):
 
         MC_T = {s : {next_s : ({} if self.P[s][next_s] else interval[0]) for next_s, interval in next_s_list.items()} for s, next_s_list in self.sparse_T.items()}
+
+        if sanity_check:
+            sanity_V = np.zeros_like(V)
 
         order = IDTMC.get_direction(spec, np.argsort(V))
 
         for s, next_s_list in self.sparse_T.items():
             if any([self.P[s][next_s] for next_s in list(next_s_list.keys())]): # if there is an uncertain/interval transition in this sparse map
-                # We separate interval and constant transitions here
-                # todo_next_s_list = {next_s : next_s_list[next_s] for next_s in next_s_list if self.P[s][next_s]}
-                # static_next_s_list = {next_s : next_s_list[next_s][0] for next_s in next_s_list if not self.P[s][next_s]}
-                # Find inner problem for sparse map of interval transitions
-                # next_map = self.solve_sparse_problem(order, todo_next_s_list)
-                # Update found probabilities with the constant values
-                # next_map.update(static_next_s_list)
                 MC_T[s] = self.solve_sparse_problem(order, next_s_list)
+                if sanity_check:
+                    sanity_V[s] = self.R[s] + sum([V[next_state_idx] * prob for next_state_idx, prob in MC_T[s].items()])
             else:
-                continue
+                if sanity_check:
+                    sanity_V[s] = self.R[s] + sum([V[next_state_idx] * prob[0] for next_state_idx, prob in next_s_list.items()])
+                else:
+                    continue
+        
+        if sanity_check:
+            mask = np.ones_like(V, dtype=bool)
+            mask[self.unreachable_states] = 0            
+            assert np.allclose(V[mask], sanity_V[mask]), np.concatenate((np.expand_dims(V[mask], axis=-1), np.expand_dims(sanity_V[mask], axis=-1)), axis=-1)
 
         return MC_T
 
@@ -709,6 +774,7 @@ class IDTMC:
                 print(output.stderr.decode("utf-8"))
                 raise error
             assert prism_values.size + len(self.unreachable_states) == self.nS, (prism_values.size, len(self.unreachable_states), self.nS)
+            target_value_state = np.where(np.isclose(prism_values, 0))
             os.remove(self.materialized_idtmc_filename)
             os.remove(value_file)
             V[self.unreachable_states] = np.inf

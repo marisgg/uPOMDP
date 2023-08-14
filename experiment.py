@@ -81,8 +81,8 @@ class Experiment:
         pomdp : POMDPWrapper = instance.build_pomdp()
         ps = cfg['p_init']
         worst_ps = ps
-        # if 'u' not in cfg['policy']:
-        mdp = instance.build_mdp(ps)
+        if 'u' not in cfg['policy']:
+            mdp = instance.build_mdp(ps)
         length = instance.simulation_length()
         checker = Checker(instance, cfg)
         net = Net(instance, cfg)
@@ -98,6 +98,8 @@ class Experiment:
 
         mdp_goal_states = [i for i, x in enumerate(pomdp.state_labels) if instance.label_to_reach in x]
 
+        assert np.array(pomdp.initial_state).item() == 0
+
         ipomdp = IPOMDP(instance, pomdp, cfg['p_bounds'], mdp_goal_states)
 
         nominal_parameters = {name : (cfg['p_init'][name], cfg['p_init'][name]) for name in cfg['p_bounds'].keys()}
@@ -107,14 +109,17 @@ class Experiment:
 
         if dynamic_uncertainty:
             Q = ipomdp.mdp_action_values(spec)
-            utils.inform(f'Synthesized iMDP-policy (min: {np.nanmin(Q):.2f}, max: {np.nanmax(Q):.2f}) w/ value = {ipomdp.imdp_V[pomdp.initial_state]}')
+            utils.inform(f'Synthesized iMDP-policy (min: {np.nanmin(Q):.2f}, max: {np.nanmax(Q):.2f}) w/ value = {np.nanmin(Q, axis=-1)[0]}')
             print(Q, file=open(f"{log.base_output_dir}/{cfg_idx}/{run_idx}/MDP-Q.txt", 'w'))
+            print(np.nanmin(Q, axis=-1))
+            print("V:", ipomdp.imdp_V)
             print(Q[pomdp.initial_state])
             print(Q.shape, ipomdp.imdp_V[pomdp.initial_state[0]])
         else:
             Q = nominal_pomdp.mdp_action_values(spec)
             utils.inform(f'Synthesized nominal ({nominal_parameters}) MDP-policy (min: {np.nanmin(Q):.2f}, max: {np.nanmax(Q):.2f}) w/ value = {nominal_pomdp.imdp_V[pomdp.initial_state]}')
             print(Q, file=open(f"{log.base_output_dir}/{cfg_idx}/{run_idx}/MDP-Q.txt", 'w'))
+            print(Q)
             print(Q[pomdp.initial_state])
             print(Q.shape, nominal_pomdp.imdp_V[pomdp.initial_state[0]])
 
@@ -143,8 +148,6 @@ class Experiment:
 
             utils.inform(f'{run_idx}-{round_idx}\t(belief)\t\t{np.count_nonzero(beliefs)} non-zero entries\t', indent = 0)
             utils.inform(f'{run_idx}-{round_idx}\t(RNN)\t\tempir\t%.4f' % rnn_empirical_result + f" {'(nominal)' if round_idx == 0 or not dynamic_uncertainty else '(worst-case)'}", indent = 0)
-            
-            # valid = empirical_result < 4 * mdp.state_values[0]
 
             until = np.argmax(observation_labels == instance.label_to_reach, axis = -1)
             until[until == 0] = length - 1
@@ -208,7 +211,7 @@ class Experiment:
 
             length = instance.simulation_length()                
 
-            nan_fixer = 1e10 if instance.objective == 'min' else -1e10
+            nan_fixer = 1e6 if instance.objective == 'min' else -1e6
 
             if cfg['policy'].lower() == 'mdp':
                 q_values = mdp.action_values[states]
@@ -218,11 +221,12 @@ class Experiment:
                 assert beliefs.shape[-1] == mdp_q_values.shape[0], "Shape mismatch."
                 q_values = np.matmul(beliefs, mdp_q_values)
             elif cfg['policy'].lower() == 'umdp':
-                q_values = Q[states]
+                q_values = np.nan_to_num(Q[states], nan=nan_fixer)
             elif cfg['policy'].lower() == 'qumdp':
-                mdp_q_values = Q
-                mdp_q_values = np.nan_to_num(mdp_q_values, nan=nan_fixer)
+                mdp_q_values = np.nan_to_num(Q, nan=nan_fixer)
                 assert beliefs.shape[-1] == mdp_q_values.shape[0], "Shape mismatch."
+                assert not np.isnan(mdp_q_values).any()
+                assert not np.isnan(beliefs).any()
                 q_values = np.matmul(beliefs, mdp_q_values)
             else:
                 raise ValueError("invalid policy")

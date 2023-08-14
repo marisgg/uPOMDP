@@ -14,6 +14,8 @@ for filename in load_file:
       cfg['a_loss'] = 'kld'
       cfg['train_deterministic'] = False
       cfg['specification'] = MDPSpec.Rminmax.value
+      # cfg['a_lr'] = 1e-4
+      # cfg['r_lr'] = 1e-4
       exp = Experiment(f"MAZE-SC-5-{i}-{cfg['name']}", cfg, 30)
       try:
          exp.execute(True)

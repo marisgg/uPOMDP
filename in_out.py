@@ -48,11 +48,11 @@ def read_and_replace(model_name,p_values):
             data = r.sub(f'{r_in}={p_values[r_in]}', data, 1)
     return data
 
-def cache_pdtmc(pdtmc_str):
+def cache_pdtmc(pdtmc_str, model_str='pdtmc'):
     """ Outputs pdtmc_str in args with filename established from current timestamp. """
     dt = datetime.now()
     dt_str = dt.strftime("%Y%m%d%H%M%S%f")
-    fn = f'{BASE_CACHE_PATH}/{dt_str}pdtmc.prism'
+    fn = f'{BASE_CACHE_PATH}/{dt_str}-{model_str}.prism'
     pdtmc_str = f'// automatically generated @ {dt}\n' + pdtmc_str
     with open(fn, 'w') as file:
         file.write(pdtmc_str)
@@ -715,6 +715,26 @@ class Log:
 
 def pdtmc_string(parametric_string, nS, nM, transitions_strings, label_strings, reward_str):
     return _pdtmc_string(parametric_string, nS * nM, transitions_strings, label_strings, reward_str)
+
+def _imdp_string(transitions_strings, label_strings, reward_str, nS, init_state = 0):
+    return f"""
+mdp
+
+module die
+
+    s : [0..{nS - 1}] init {init_state};
+
+    {transitions_strings}
+
+endmodule
+
+rewards
+    {reward_str}
+endrewards
+
+{label_strings}
+
+"""
 
 def _pdtmc_string(parametric_string, MC_STATES, transitions_strings, label_strings, reward_str):
     contents = f"""

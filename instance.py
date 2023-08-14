@@ -68,7 +68,7 @@ class Instance:
 
         """
 
-        prism_program = stormpy.parse_prism_program(self.path, simplify = False)
+        prism_program = stormpy.parse_prism_program(self.path, simplify = True)
         expression_manager = prism_program.expression_manager
         constants = prism_program.constants
         undefined_constants = []
@@ -90,12 +90,18 @@ class Instance:
         if prism_program.has_undefined_constants:
             model = stormpy.build_sparse_parametric_model_with_options(prism_program, options)
         else:
+            assert False
             model = stormpy.build_sparse_model_with_options(prism_program, options)
+        
+        # for s in model.states:
+            # for a in s.actions:
+                # for transition in a.transitions:
+                    # print("From state {} with action {}, with probability {}, go to state {}".format(model.state_valuations.get_json(s), a, transition.value(), transition.column))
 
         nr_states = model.nr_states
-        model = stormpy.pomdp.make_canonic(model)
-        added_states = model.nr_states - nr_states
-        utils.inform(f'Built POMDP with nS = {model.nr_states} and nO = {model.nr_observations}. (Canonical added {added_states} states.)')
+        # model = stormpy.pomdp.make_canonic(model)
+        # added_states = model.nr_states - nr_states
+        utils.inform(f'Built POMDP with nS = {model.nr_states} and nO = {model.nr_observations}.')# (Canonical added {added_states} states.)')
 
         self.pomdp = POMDPWrapper(model, self.properties)
 
