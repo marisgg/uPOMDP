@@ -114,11 +114,27 @@ class Log:
 
     @property
     def fsc_empirical_result(self):
-        return self._rnn_empirical_result
+        return self._fsc_empirical_result
 
     @fsc_empirical_result.setter
     def fsc_empirical_result(self, value):
         self._fsc_empirical_result = value
+
+    @property
+    def fsc_mean_cum_rewards(self):
+        return self._fsc_mean_cum_rewards
+
+    @fsc_mean_cum_rewards.setter
+    def fsc_mean_cum_rewards(self, value):
+        self._fsc_mean_cum_rewards = value
+
+    @property
+    def rnn_mean_cum_rewards(self):
+        return self._rnn_mean_cum_rewards
+
+    @rnn_mean_cum_rewards.setter
+    def rnn_mean_cum_rewards(self, value):
+        self._rnn_mean_cum_rewards = value
 
     @property
     def evalues(self):

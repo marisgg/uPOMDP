@@ -42,7 +42,7 @@ class IPOMDP:
     Interval wrapping of a pPOMDP in Stormpy by keeping a lower and upper bound transition matrix induced by the intervals given for the parameters.
     """
 
-    def __init__(self, instance : Instance, pPOMDP : POMDPWrapper, intervals : dict[str, list], target_states : list[int]) -> None:
+    def __init__(self, instance : Instance, pPOMDP : POMDPWrapper, intervals : dict[str, list], target_states : list[int], force_intervals, build_prism_file = True) -> None:
         self.instance = instance
         self.pPOMDP = pPOMDP # the underling pPOMDP wrapper
         self.intervals : dict[str, list] = intervals
@@ -61,13 +61,13 @@ class IPOMDP:
         self.nA = pPOMDP.nA
         # self.reward_zero_states, self.reward_inf_states = self.preprocess(target_states)
 
-        if USE_PRISM_IMDP:
-            self.prism_file = self.to_prism_file()
+        if build_prism_file and USE_PRISM_IMDP:
+            self.prism_file = self.to_prism_file(force_intervals)
         
         self.imdp_Q = None
         self.imdp_V = None
     
-    def to_prism_file(self):
+    def to_prism_file(self, force_intervals=False):
         all_trans_strings = ""
         rewards_strings = ""
 
@@ -82,7 +82,7 @@ class IPOMDP:
                         first = False
                     else:
                         trans_string += " + "
-                    if np.isclose(interval[0], interval[1]):
+                    if not force_intervals and np.isclose(interval[0], interval[1]):
                         trans_string += f"{interval[0]} : (s'={next_s})"
                     else:
                         trans_string += f"[{interval[0]}, {interval[1]}] : (s'={next_s})"
@@ -256,7 +256,7 @@ class IPOMDP:
 
         return IDTMC(self.nS * nM, MC_T, MC_P, rewards, state_labels, memory_labels, labels_to_states, unreachable_states)
 
-    def instantiate_pdtmc(self, fsc : FiniteMemoryPolicy, zero = 1e-8):
+    def instantiate_pdtmc(self, fsc : FiniteMemoryPolicy, zero = 1e-8, remove_file_from_disk = True):
         """
         Instantiates the (p)DTMC, which is parameterized by values of the policy.
 
@@ -386,7 +386,8 @@ class IPOMDP:
         contents = in_out.pdtmc_string(p_string, self.nS, nM, transitions_strings, label_strings, rewards_strs[0])
         fn = in_out.cache_pdtmc(contents)
         prism_program = stormpy.parse_prism_program(fn, simplify = False)
-        # os.remove(fn)
+        if remove_file_from_disk:
+            os.remove(fn)
         if self.pPOMDP.is_parametric:
             model = stormpy.build_sparse_parametric_model(prism_program)
             p_region_dict = {
@@ -451,15 +452,15 @@ class IPOMDP:
             else:
                 if not any([self.P[(s,a)][next_s] for next_s in next_states_dict.keys()]):
                     next_s_transition = {next_s : interval[0] for next_s, interval in next_states_dict.items()}
-                    print("Certain transitions:")
-                    print(next_s_transition)
+                    # print("Certain transitions:")
+                    # print(next_s_transition)
                     assert np.isclose(sum(next_s_transition.values()), 1), (next_s_transition.values(), sum(next_s_transition.values()))
                     Q[s, a] = (self.R[s,a] if self.state_action_rewards else self.R[s]) + sum([V[next_state_idx] * prob for next_state_idx, prob in next_s_transition.items()])
                 else:
-                    print("Uncertain transitions:")
-                    print(next_states_dict)
+                    # print("Uncertain transitions:")
+                    # print(next_states_dict)
                     next_s_transition = IDTMC.solve_sparse_problem(order, next_states_dict)
-                    print(next_s_transition)
+                    # print(next_s_transition)
                     assert np.isclose(sum(next_s_transition.values()), 1), (next_s_transition.values(), sum(next_s_transition.values()))
                     Q[s, a] = (self.R[s,a] if self.state_action_rewards else self.R[s]) + sum([V[next_state_idx] * prob for next_state_idx, prob in next_s_transition.items()])
         return Q
@@ -488,6 +489,7 @@ class IPOMDP:
                 print(output.args)
                 raise error
             os.remove(value_file)
+            os.remove(self.prism_file)
             assert V.size == self.nS, (V.size, self.nS)
             Q = self.one_step_VI(V, spec, set_unreachable_to_nan=True)
 

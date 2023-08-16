@@ -163,11 +163,6 @@ class Net(tf.keras.Model):
         else:
             h = reset
 
-        T = {}
-        
-        for (s, a), next_state_list in ipomdp.T.items():
-            T[(s,a)] = {next_s : (random.uniform(interval[0], interval[1]) if ipomdp.P[(s,a)][next_s] else interval[0]) for next_s, interval in next_state_list.items()}
-
         for l in range(length):
 
             beliefs[:, l] = belief
@@ -190,7 +185,7 @@ class Net(tf.keras.Model):
             rewards[:, l, :] = ipomdp.R[state, action][..., np.newaxis] if ipomdp.state_action_rewards else ipomdp.R[state][..., np.newaxis]
             for b in range(batch_dim):
                 possible_states = list(ipomdp.T[(state[b], action[b])].keys())
-                probs = T[(state[b], action[b])].values()
+                probs = np.array(list(ipomdp.T[(state[b], action[b])].values()))[:, 0]
                 state[b] = random.choices(possible_states, weights=probs, k=1)[0]
             observation = ipomdp.pPOMDP.O[state]
 
@@ -198,12 +193,12 @@ class Net(tf.keras.Model):
             for b in range(batch_dim):
                 possible_states = np.where(ipomdp.pPOMDP.O == observation[b])
                 next_belief[b, possible_states] = 1
-                for (s, a), next_state_list in T.items():
+                for (s, a), next_state_list in ipomdp.T.items():
                     if a != action[b]:
                         continue
                     for possible_state in possible_states[0]:
                         if possible_state in next_state_list:
-                            next_belief[b, possible_state] += belief[b, possible_state] * next_state_list[possible_state]
+                            next_belief[b, possible_state] += belief[b, possible_state] * next_state_list[possible_state][0]
                 next_belief[b] = ut.normalize(next_belief[b])
             belief = np.array(next_belief)
 

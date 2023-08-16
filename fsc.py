@@ -108,6 +108,7 @@ class FiniteMemoryPolicy:
     
     def simulate_fsc_with_normal_T(self, ipomdp, pomdp : POMDPWrapper, batch_dim, length, greedy = False):
         """ Simulates an interaction of this HxQBN-GRU-RNN with a POMDP model application. """
+        self.reset(batch_dim)
         assert batch_dim == self.batch_dim
 
         states = np.zeros((batch_dim, length), dtype = 'int64')
@@ -129,7 +130,7 @@ class FiniteMemoryPolicy:
             rewards[:, l, :] = ipomdp.R[state, action][..., np.newaxis] if ipomdp.state_action_rewards else ipomdp.R[state][..., np.newaxis]
             for b in range(batch_dim):
                 possible_states = list(ipomdp.T[(state[b], action[b])].keys())
-                probs = ipomdp.T[(state[b], action[b])].values()
+                probs = np.array(list(ipomdp.T[(state[b], action[b])].values()))[:, 0]
                 state[b] = random.choices(possible_states, weights=probs, k=1)[0]
             observation = pomdp.O[state]
         

@@ -1,4 +1,5 @@
-{"evade":[{"name":"evade",
+{"SC_mazes":[
+{"name":"SC-maze0",
 "formula_str":"Rmin=? [F \"goal\"]",
 "ctrx_gen":"crt_full",
 "rounds":100,
@@ -17,7 +18,7 @@
 "a_epochs":16,
 "num_hx_qbns":8,
 "method": "QBN",
-"memory_dim":3,
+"memory_dim":4,
 "pso_n":500,
 "pso_fr":0.5,
 "blow_up":2,
